@@ -31,7 +31,7 @@ function fail(message) {
 
 const files = readdirSync(DIR)
   .filter((name) => name.endsWith(".sql"))
-  .sort();
+  .toSorted();
 
 // Sequential numbering, starting at 0001, with no gaps and no duplicates. A gap
 // is a migration someone forgot to commit; a duplicate is two people numbering
@@ -46,10 +46,10 @@ for (const name of files) {
   numbers.push({ number: Number(match[1]), name });
 }
 
-numbers.sort((a, b) => a.number - b.number);
-for (let i = 0; i < numbers.length; i++) {
+const ordered = numbers.toSorted((a, b) => a.number - b.number);
+for (let i = 0; i < ordered.length; i++) {
   const expected = i + 1;
-  const { number, name } = numbers[i];
+  const { number, name } = ordered[i];
   if (number !== expected) {
     fail(`expected migration ${String(expected).padStart(4, "0")}, found "${name}"`);
     break;
