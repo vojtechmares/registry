@@ -1,12 +1,15 @@
 import type { CleanupRule, ProjectSettings, Visibility } from "@registry/api-contract";
 import { isValidCron } from "@registry/cron";
 import { EVENT_TYPES, type EventType, isAllowedWebhookUrl, isEventType } from "@registry/notifications";
+import { isValidRepositoryName } from "@registry/oci";
 import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/projects";
-import { parseRange } from "@registry/semver";
+import type { Direction, Trigger } from "@registry/replication";
+import { parseRange, type TagFilter } from "@registry/semver";
 import type { Identity, Principal } from "../auth/principal.js";
 import type { AuthStore } from "../auth/store.js";
 import type { AdminStore, Viewer } from "../storage/admin.js";
 import type { NotificationStore } from "../notifications/store.js";
+import type { ReplicationStore } from "../replication/store.js";
 import type { CleanupPolicyInput, CleanupStore } from "../storage/cleanup.js";
 import type { ProjectStore } from "../storage/projects.js";
 import type { StatsStore } from "../storage/stats.js";
@@ -17,6 +20,7 @@ import {
   notFound,
   optionalPositive,
   readJson,
+  requireJsonBody,
   requireUser,
 } from "./support.js";
 
@@ -30,6 +34,9 @@ export interface ProjectContext {
   readonly stats: StatsStore;
   readonly cleanup: CleanupStore;
   readonly notifications: NotificationStore;
+  readonly replication: ReplicationStore;
+  /** Enqueues a manual run. Injected so the routes need no queue of their own. */
+  readonly enqueueReplication: (ruleId: string) => Promise<void>;
 }
 
 /** `?days=` bounded to something a chart can hold and the table can still serve. */
@@ -100,8 +107,161 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
   if (section === "notifications" && target === undefined) return notificationPolicies(ctx, name);
   if (section === "notifications" && target !== undefined) return removeNotification(ctx, name, target);
   if (section === "deliveries" && target === undefined) return deliveries(ctx, name);
+  if (section === "replication" && target === undefined) return replicationRules(ctx, name);
+  if (section === "replication" && target !== undefined) return replicationRule(ctx, name, target);
+  if (section === "executions" && target === undefined) return executions(ctx, name);
 
   throw notFound();
+}
+
+/** Only https, and only a URL. A rule sends credentials there. */
+function validRemoteUrl(raw: unknown): string {
+  if (typeof raw !== "string") throw badRequest("remoteUrl is required");
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw badRequest("remoteUrl must be a URL");
+  }
+  if (url.protocol !== "https:") throw badRequest("remoteUrl must be https");
+  return url.origin;
+}
+
+function validTagFilter(raw: unknown): TagFilter {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object") throw badRequest("tagFilter must be an object");
+  const filter = raw as Record<string, unknown>;
+
+  if (filter.pattern !== undefined && typeof filter.pattern !== "string") {
+    throw badRequest("tagFilter.pattern must be a string");
+  }
+  if (filter.semver !== undefined) {
+    if (typeof filter.semver !== "string") throw badRequest("tagFilter.semver must be a string");
+    if (filter.semver !== "" && parseRange(filter.semver) === null) {
+      throw badRequest(`"${filter.semver}" is not a valid semver range`);
+    }
+  }
+  if (filter.includePrerelease !== undefined && typeof filter.includePrerelease !== "boolean") {
+    throw badRequest("tagFilter.includePrerelease must be a boolean");
+  }
+
+  return {
+    ...(filter.pattern === undefined ? {} : { pattern: filter.pattern as string }),
+    ...(filter.semver === undefined ? {} : { semver: filter.semver as string }),
+    ...(filter.includePrerelease === undefined
+      ? {}
+      : { includePrerelease: filter.includePrerelease as boolean }),
+  };
+}
+
+async function replicationRules(ctx: ProjectContext, name: string): Promise<Response> {
+  await requireProjectOwner(ctx, name);
+
+  if (ctx.request.method === "GET") {
+    return Response.json({ rules: await ctx.replication.list(name) });
+  }
+  if (ctx.request.method !== "POST") throw notFound();
+  if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
+
+  const body = await readJson<Record<string, unknown>>(ctx.request);
+
+  if (typeof body.name !== "string" || body.name.trim() === "") throw badRequest("name is required");
+  if (body.direction !== "push" && body.direction !== "pull") {
+    throw badRequest('direction must be "push" or "pull"');
+  }
+  const direction = body.direction as Direction;
+
+  const trigger = body.trigger ?? "manual";
+  if (trigger !== "manual" && trigger !== "event" && trigger !== "scheduled") {
+    throw badRequest('trigger must be "manual", "event" or "scheduled"');
+  }
+  // A pull rule is a subscription to somebody else's registry. Nothing that
+  // happens here can make it run, so it has no event trigger.
+  if (direction === "pull" && trigger === "event") {
+    throw badRequest("a pull rule cannot be triggered by a push to this registry");
+  }
+
+  let schedule: string | null = null;
+  if (trigger === "scheduled") {
+    if (typeof body.schedule !== "string" || !isValidCron(body.schedule)) {
+      throw badRequest("a scheduled rule needs a five-field cron expression, in UTC");
+    }
+    schedule = body.schedule;
+  }
+
+  const sourceRepositories: string[] = [];
+  if (direction === "pull") {
+    if (!Array.isArray(body.sourceRepositories) || body.sourceRepositories.length === 0) {
+      throw badRequest("a pull rule must name the remote repositories it subscribes to");
+    }
+    for (const repository of body.sourceRepositories) {
+      if (typeof repository !== "string" || !isValidRepositoryName(repository)) {
+        throw badRequest(`"${String(repository)}" is not a valid repository name`);
+      }
+      sourceRepositories.push(repository);
+    }
+  }
+
+  const repositoryFilter = body.repositoryFilter ?? "*";
+  if (typeof repositoryFilter !== "string" || repositoryFilter === "") {
+    throw badRequest("repositoryFilter must be a non-empty glob");
+  }
+
+  const destinationNamespace = body.destinationNamespace ?? "";
+  if (typeof destinationNamespace !== "string") throw badRequest("destinationNamespace must be a string");
+
+  let credentials: { username: string; password: string } | null = null;
+  if (body.remoteUsername !== undefined || body.remotePassword !== undefined) {
+    if (typeof body.remoteUsername !== "string" || typeof body.remotePassword !== "string") {
+      throw badRequest("remoteUsername and remotePassword must be given together");
+    }
+    credentials = { username: body.remoteUsername, password: body.remotePassword };
+  }
+
+  const rule = await ctx.replication.create({
+    id: crypto.randomUUID(),
+    project: name,
+    name: body.name.trim(),
+    direction,
+    remoteUrl: validRemoteUrl(body.remoteUrl),
+    credentials,
+    destinationNamespace,
+    repositoryFilter,
+    sourceRepositories,
+    tagFilter: validTagFilter(body.tagFilter),
+    trigger: trigger as Trigger,
+    schedule,
+  });
+
+  return Response.json(rule, { status: 201 });
+}
+
+/** `DELETE` removes the rule; `POST` runs it now. */
+async function replicationRule(ctx: ProjectContext, name: string, id: string): Promise<Response> {
+  await requireProjectOwner(ctx, name);
+
+  if (ctx.request.method === "DELETE") {
+    if (!(await ctx.replication.remove(name, id))) throw notFound("no such replication rule");
+    return new Response(null, { status: 204 });
+  }
+
+  if (ctx.request.method !== "POST") throw notFound();
+  requireJsonBody(ctx.request);
+
+  const rule = await ctx.replication.get(id);
+  if (rule === null || rule.project !== name) throw notFound("no such replication rule");
+
+  await ctx.enqueueReplication(id);
+  return Response.json({ queued: true, rule: id }, { status: 202 });
+}
+
+/** What each run copied, so a rule that quietly stopped working can be found. */
+async function executions(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  await requireProjectOwner(ctx, name);
+
+  const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
+  return Response.json({ executions: await ctx.replication.executions(name, limit) });
 }
 
 /**

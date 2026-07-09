@@ -41,6 +41,9 @@ importers:
       '@registry/registry-core':
         specifier: workspace:*
         version: link:../../packages/registry-core
+      '@registry/replication':
+        specifier: workspace:*
+        version: link:../../packages/replication
       '@registry/retention':
         specifier: workspace:*
         version: link:../../packages/retention

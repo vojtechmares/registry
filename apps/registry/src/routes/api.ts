@@ -16,6 +16,9 @@ import { AuthStore } from "../auth/store.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
 import { NotificationStore } from "../notifications/store.js";
+import { REPLICATE_TASK } from "../replication/execute.js";
+import { ReplicationStore } from "../replication/store.js";
+import { TaskQueue } from "../tasks/queue.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
 import { StatsStore } from "../storage/stats.js";
@@ -82,7 +85,14 @@ export async function handleApiRequest(
   const usage = new StatsStore(env.DB);
   const cleanup = new CleanupStore(env.DB);
   const notifications = new NotificationStore(env.DB);
+  const replication = new ReplicationStore(env.DB, env.JWT_SECRET);
   const path = url.pathname.slice(PREFIX.length);
+
+  // A manual run is queued, never executed inline: the request that asked for it
+  // must not wait on another registry's network.
+  const enqueueReplication = async (ruleId: string): Promise<void> => {
+    await new TaskQueue(env.DB).enqueue({ kind: REPLICATE_TASK, payload: { ruleId } });
+  };
   const secure = url.protocol === "https:";
 
   try {
@@ -98,6 +108,8 @@ export async function handleApiRequest(
       stats: usage,
       cleanup,
       notifications,
+      replication,
+      enqueueReplication,
       config,
       secure,
       env,
@@ -124,6 +136,8 @@ interface Context {
   stats: StatsStore;
   cleanup: CleanupStore;
   notifications: NotificationStore;
+  replication: ReplicationStore;
+  enqueueReplication: (ruleId: string) => Promise<void>;
   config: RegistryConfig;
   secure: boolean;
   env: Env;

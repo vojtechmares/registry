@@ -20,6 +20,7 @@
     "@registry/oci": "workspace:*",
     "@registry/projects": "workspace:*",
     "@registry/registry-core": "workspace:*",
+    "@registry/replication": "workspace:*",
     "@registry/retention": "workspace:*",
     "@registry/semver": "workspace:*",
     "@registry/signing": "workspace:*"

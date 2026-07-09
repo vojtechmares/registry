@@ -12,6 +12,8 @@ import { runLifecycle } from "./lifecycle/policies.js";
 import { NOTIFY_TASK, handleNotifyTask, notify } from "./notifications/dispatch.js";
 import { dedupe, toNotificationEvent } from "./notifications/translate.js";
 import { ProjectPolicy } from "./policy.js";
+import { REPLICATE_TASK, handleReplicateTask, runDueReplications } from "./replication/execute.js";
+import { triggerReplication } from "./replication/trigger.js";
 import { enforceAddressRateLimit, enforcePrincipalRateLimit } from "./rate-limit.js";
 import { handleApiRequest, handleCatalog } from "./routes/api.js";
 import { handleToken } from "./routes/token.js";
@@ -40,6 +42,7 @@ const TASK_RETENTION_MS = 7 * 86_400_000;
 /** Every kind of background work the queue knows how to run. */
 const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   [NOTIFY_TASK]: handleNotifyTask,
+  [REPLICATE_TASK]: handleReplicateTask,
 };
 
 async function nightlyMaintenance(env: Env): Promise<void> {
@@ -58,6 +61,9 @@ async function nightlyMaintenance(env: Env): Promise<void> {
 async function sweepSchedules(env: Env): Promise<void> {
   const cleanups = await runDueCleanups(env);
   if (cleanups.length > 0) console.log("cleanup policies run", cleanups);
+
+  const replications = await runDueReplications(env);
+  if (replications > 0) console.log("scheduled replications run", { rules: replications });
 
   const tasks = await sweepTasks(env, TASK_HANDLERS);
   if (tasks.ran > 0) console.log("background tasks run", tasks);
@@ -169,15 +175,24 @@ async function recordEvents(
     }),
   );
 
+  let queued = 0;
   for (const event of notifications) {
     try {
-      const queued = await notify(env, event);
-      // Deliver now rather than waiting up to fifteen minutes for the sweep.
-      if (queued > 0) ctx.waitUntil(sweepTasks(env, TASK_HANDLERS));
+      queued += await notify(env, event);
     } catch (error) {
       console.error("failed to queue notifications", error);
     }
   }
+
+  try {
+    queued += await triggerReplication(env, events.events);
+  } catch (error) {
+    console.error("failed to queue replication", error);
+  }
+
+  // Run what was queued now rather than waiting up to fifteen minutes for the
+  // sweep. The rows are already durable, so the sweep would get there anyway.
+  if (queued > 0) ctx.waitUntil(sweepTasks(env, TASK_HANDLERS));
 }
 
 /**
