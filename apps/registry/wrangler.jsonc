@@ -43,8 +43,11 @@
     },
   ],
 
-  // Nightly maintenance: lifecycle policies, then garbage collection.
-  "triggers": { "crons": ["17 3 * * *"] },
+  // Two schedules. The quarter-hourly sweep runs whichever project cleanup
+  // policies have come due, so a project's own cron expression is honoured to
+  // within fifteen minutes. The nightly one does the heavy maintenance:
+  // lifecycle retirement, then garbage collection.
+  "triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
 
   "vars": {
     "ALLOW_ANONYMOUS_PULL": "true",
@@ -84,7 +87,7 @@
           { "name": "RATE_LIMITER", "class_name": "RateLimiterObject" },
         ],
       },
-      "triggers": { "crons": ["17 3 * * *"] },
+      "triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
       "vars": {
         "REGISTRY_HOST": "registry.mareshq.com",
         "ALLOW_ANONYMOUS_PULL": "true",

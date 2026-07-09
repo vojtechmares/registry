@@ -1,8 +1,11 @@
-import type { ProjectSettings, Visibility } from "@registry/api-contract";
+import type { CleanupRule, ProjectSettings, Visibility } from "@registry/api-contract";
+import { isValidCron } from "@registry/cron";
 import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/projects";
+import { parseRange } from "@registry/semver";
 import type { Identity, Principal } from "../auth/principal.js";
 import type { AuthStore } from "../auth/store.js";
 import type { AdminStore, Viewer } from "../storage/admin.js";
+import type { CleanupPolicyInput, CleanupStore } from "../storage/cleanup.js";
 import type { ProjectStore } from "../storage/projects.js";
 import type { StatsStore } from "../storage/stats.js";
 import {
@@ -23,6 +26,7 @@ export interface ProjectContext {
   readonly admin: AdminStore;
   readonly auth: AuthStore;
   readonly stats: StatsStore;
+  readonly cleanup: CleanupStore;
 }
 
 /** `?days=` bounded to something a chart can hold and the table can still serve. */
@@ -86,10 +90,131 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
   if (section === undefined) return projectDetail(ctx, name);
   if (section === "repositories" && target === undefined) return projectRepositories(ctx, name);
   if (section === "stats" && target === undefined) return projectStats(ctx, name);
+  if (section === "cleanup" && target === undefined) return cleanupPolicy(ctx, name);
+  if (section === "events" && target === undefined) return cleanupEvents(ctx, name);
   if (section === "members" && target === undefined) return listMembers(ctx, name);
   if (section === "members" && target !== undefined) return member(ctx, name, target);
 
   throw notFound();
+}
+
+/**
+ * Validates one retention rule.
+ *
+ * Strictly, because these rules delete images. A range that does not parse, or
+ * a repository glob that is empty, would each be a rule whose effect nobody
+ * intended; the evaluator already refuses to act on them, and refusing them
+ * here means the operator finds out at the moment they typed it rather than at
+ * three in the morning.
+ */
+function validateRule(raw: unknown, index: number): CleanupRule {
+  const fail = (message: string): never => {
+    throw badRequest(`rules[${index}]: ${message}`);
+  };
+
+  if (typeof raw !== "object" || raw === null) return fail("must be an object");
+  const rule = raw as Record<string, unknown>;
+
+  const repositories = rule.repositories;
+  if (typeof repositories !== "string" || repositories === "") {
+    return fail("repositories must be a non-empty glob");
+  }
+
+  const tags = (rule.tags ?? {}) as Record<string, unknown>;
+  if (typeof tags !== "object" || tags === null) return fail("tags must be an object");
+
+  const pattern = tags.pattern;
+  if (pattern !== undefined && typeof pattern !== "string") return fail("tags.pattern must be a string");
+
+  const semver = tags.semver;
+  if (semver !== undefined) {
+    if (typeof semver !== "string") return fail("tags.semver must be a string");
+    if (semver !== "" && parseRange(semver) === null) return fail(`"${semver}" is not a valid semver range`);
+  }
+
+  const includePrerelease = tags.includePrerelease;
+  if (includePrerelease !== undefined && typeof includePrerelease !== "boolean") {
+    return fail("tags.includePrerelease must be a boolean");
+  }
+
+  const keepBy = rule.keepBy;
+  if (keepBy !== undefined && keepBy !== "updated" && keepBy !== "semver") {
+    return fail('keepBy must be "updated" or "semver"');
+  }
+
+  const keepLast = nonNegative(rule.keepLast, `rules[${index}].keepLast`);
+  const keepWithinDays = nonNegative(rule.keepWithinDays, `rules[${index}].keepWithinDays`);
+
+  return {
+    repositories,
+    tags: {
+      ...(pattern === undefined ? {} : { pattern }),
+      ...(semver === undefined ? {} : { semver }),
+      ...(includePrerelease === undefined ? {} : { includePrerelease }),
+    },
+    keepLast,
+    keepWithinDays,
+    ...(keepBy === undefined ? {} : { keepBy }),
+  };
+}
+
+function nonNegative(value: unknown, field: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw badRequest(`${field} must be a non-negative integer or null`);
+  }
+  return value;
+}
+
+/** `GET` reads the policy; `PUT` replaces it. Owners only: these rules delete images. */
+async function cleanupPolicy(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method === "GET") {
+    await requireProjectOwner(ctx, name);
+    const policy = await ctx.cleanup.get(name);
+    return Response.json(
+      policy ?? {
+        project: name,
+        enabled: false,
+        schedule: "0 3 * * *",
+        rules: [],
+        untaggedOlderThanDays: null,
+        nextRunAt: null,
+        lastRunAt: null,
+        lastResult: null,
+      },
+    );
+  }
+
+  if (ctx.request.method !== "PUT") throw notFound();
+  await requireProjectOwner(ctx, name);
+  if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
+
+  const body = await readJson<Record<string, unknown>>(ctx.request);
+
+  const schedule = body.schedule;
+  if (typeof schedule !== "string" || !isValidCron(schedule)) {
+    throw badRequest("schedule must be a five-field cron expression, in UTC");
+  }
+  if (!Array.isArray(body.rules)) throw badRequest("rules must be an array");
+  if (typeof body.enabled !== "boolean") throw badRequest("enabled must be a boolean");
+
+  const input: CleanupPolicyInput = {
+    enabled: body.enabled,
+    schedule,
+    rules: body.rules.map(validateRule),
+    untaggedOlderThanDays: nonNegative(body.untaggedOlderThanDays, "untaggedOlderThanDays"),
+  };
+
+  return Response.json(await ctx.cleanup.put(name, input));
+}
+
+/** What maintenance removed, so a surprising deletion can be explained after the fact. */
+async function cleanupEvents(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  await requireProjectOwner(ctx, name);
+
+  const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
+  return Response.json({ events: await ctx.cleanup.events(name, limit) });
 }
 
 /**

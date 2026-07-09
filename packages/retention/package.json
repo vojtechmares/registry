@@ -1,0 +1,21 @@
+{
+  "name": "@registry/retention",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Which tags a cleanup run keeps, and which it deletes",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@registry/semver": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

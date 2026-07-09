@@ -15,9 +15,12 @@
   },
   "dependencies": {
     "@registry/api-contract": "workspace:*",
+    "@registry/cron": "workspace:*",
     "@registry/oci": "workspace:*",
     "@registry/projects": "workspace:*",
     "@registry/registry-core": "workspace:*",
+    "@registry/retention": "workspace:*",
+    "@registry/semver": "workspace:*",
     "@registry/signing": "workspace:*"
   },
   "devDependencies": {

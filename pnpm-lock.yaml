@@ -26,6 +26,9 @@ importers:
       '@registry/api-contract':
         specifier: workspace:*
         version: link:../../packages/api-contract
+      '@registry/cron':
+        specifier: workspace:*
+        version: link:../../packages/cron
       '@registry/oci':
         specifier: workspace:*
         version: link:../../packages/oci
@@ -35,6 +38,12 @@ importers:
       '@registry/registry-core':
         specifier: workspace:*
         version: link:../../packages/registry-core
+      '@registry/retention':
+        specifier: workspace:*
+        version: link:../../packages/retention
+      '@registry/semver':
+        specifier: workspace:*
+        version: link:../../packages/semver
       '@registry/signing':
         specifier: workspace:*
         version: link:../../packages/signing
@@ -134,6 +143,15 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/cron:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
+
   packages/oci:
     devDependencies:
       typescript:
@@ -161,6 +179,19 @@ importers:
       '@registry/oci':
         specifier: workspace:*
         version: link:../oci
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
+
+  packages/retention:
+    dependencies:
+      '@registry/semver':
+        specifier: workspace:*
+        version: link:../semver
     devDependencies:
       typescript:
         specifier: ^5.9.3

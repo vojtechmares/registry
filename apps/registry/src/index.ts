@@ -6,6 +6,7 @@ import { resolvePrincipal, type Principal } from "./auth/principal.js";
 import { AuthStore } from "./auth/store.js";
 import { readCoreConfig, type Env } from "./env.js";
 import { EventCollector } from "./events.js";
+import { runDueCleanups } from "./lifecycle/cleanup.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
 import { runLifecycle } from "./lifecycle/policies.js";
 import { ProjectPolicy } from "./policy.js";
@@ -26,6 +27,21 @@ function notFound(): Response {
   return Response.json({ errors: [{ code: "UNSUPPORTED", message: "not found" }] }, { status: 404 });
 }
 
+/** Must match `triggers.crons` in wrangler.jsonc. */
+const NIGHTLY_CRON = "17 3 * * *";
+
+async function nightlyMaintenance(env: Env): Promise<void> {
+  const retired = await runLifecycle(env);
+  const reclaimed = await collectGarbage(env);
+  const pruned = await new StatsStore(env.DB).prune();
+  console.log("nightly maintenance complete", { retired, reclaimed, pruned });
+}
+
+async function sweepSchedules(env: Env): Promise<void> {
+  const cleanups = await runDueCleanups(env);
+  if (cleanups.length > 0) console.log("cleanup policies run", cleanups);
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
@@ -41,19 +57,15 @@ export default {
   },
 
   /**
-   * Nightly maintenance. Lifecycle policies retire content first, then garbage
-   * collection reclaims whatever no longer has a referrer - in that order, so a
-   * single run reclaims what it just retired.
+   * Two schedules, doing very different amounts of work.
+   *
+   * The frequent one only asks which project cleanup policies have come due, so
+   * that a project's own cron expression is honoured to within a quarter hour.
+   * The nightly one retires content and then reclaims it - in that order, so a
+   * single run collects what it has just retired - and prunes old counters.
    */
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      (async () => {
-        const retired = await runLifecycle(env);
-        const reclaimed = await collectGarbage(env);
-        const pruned = await new StatsStore(env.DB).prune();
-        console.log("maintenance complete", { retired, reclaimed, pruned });
-      })(),
-    );
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(event.cron === NIGHTLY_CRON ? nightlyMaintenance(env) : sweepSchedules(env));
   },
 } satisfies ExportedHandler<Env>;
 

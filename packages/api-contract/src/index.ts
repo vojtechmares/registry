@@ -192,3 +192,29 @@ export interface UsageStats {
   /** Present for a project, absent for a single repository. */
   readonly repositories?: readonly RepositoryUsage[];
 }
+
+/** Which tags a cleanup rule governs, and how many of them it keeps. */
+export interface CleanupRule {
+  /** A glob over repository names within the project. `*` for all of them. */
+  readonly repositories: string;
+  readonly tags: {
+    readonly pattern?: string;
+    readonly semver?: string;
+    readonly includePrerelease?: boolean;
+  };
+  readonly keepLast: number | null;
+  readonly keepWithinDays: number | null;
+  readonly keepBy?: "updated" | "semver";
+}
+
+export interface CleanupPolicy {
+  readonly project: string;
+  readonly enabled: boolean;
+  /** A five-field cron expression, in UTC. */
+  readonly schedule: string;
+  readonly rules: readonly CleanupRule[];
+  readonly untaggedOlderThanDays: number | null;
+  readonly nextRunAt: number | null;
+  readonly lastRunAt: number | null;
+  readonly lastResult: { tagsRemoved: number; untaggedRemoved: number } | null;
+}
