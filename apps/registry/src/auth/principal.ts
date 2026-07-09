@@ -173,4 +173,4 @@ export function isOciError(error: unknown): error is OciError {
 }
 
 /** A real PBKDF2 hash of a random password, used only to equalise timing. */
-const DUMMY_HASH = "pbkdf2$210000$AAAAAAAAAAAAAAAAAAAAAA==$Ym9ndXNoYXNoYm9ndXNoYXNoYm9ndXNoYXNoYm9ndXM=";
+const DUMMY_HASH = "pbkdf2$100000$hXncAldFBm8bhU0jklAJiw==$9ueXPCz+2qMqCW8uytg6jJndROgP9/eWbwuLdnzv24A=";

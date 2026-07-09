@@ -11,7 +11,9 @@
 
 import { webcrypto } from "node:crypto";
 
-const ITERATIONS = 210_000;
+// Must match apps/registry/src/auth/password.ts. The Workers runtime rejects
+// PBKDF2 above 100,000 iterations, so that is the ceiling.
+const ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
 

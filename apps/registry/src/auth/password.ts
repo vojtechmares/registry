@@ -3,12 +3,17 @@
  * function Web Crypto exposes inside a Worker. Argon2 and scrypt would be
  * preferable, but neither is available without shipping WASM.
  *
- * Encoded form: `pbkdf2$<iterations>$<base64 salt>$<base64 hash>`. The
- * iteration count travels with the hash so it can be raised later without
- * invalidating existing passwords.
+ * The Workers runtime caps PBKDF2 at 100,000 iterations - `deriveBits` throws
+ * a `NotSupportedError` above it - so that is the ceiling here, below the
+ * 600,000 OWASP now recommends. Two things compensate: credential-verifying
+ * requests are rate limited and cost-amplified before any hash runs, and the
+ * iteration count is encoded with each hash, so it can be raised the moment the
+ * platform lifts the cap without invalidating stored passwords.
+ *
+ * Encoded form: `pbkdf2$<iterations>$<base64 salt>$<base64 hash>`.
  */
 
-const ITERATIONS = 210_000;
+const ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
 
