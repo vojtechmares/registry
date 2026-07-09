@@ -40,6 +40,11 @@ free_port
 echo "==> resetting local state"
 rm -rf "$ROOT/apps/registry/.wrangler/state"
 
+# The Worker binds the dashboard's built assets. wrangler dev refuses to start
+# if that directory is missing, so guarantee it exists even on a fresh checkout
+# where the UI has not been built (the conformance suite only touches /v2).
+mkdir -p "$ROOT/apps/web/dist"
+
 echo "==> applying migrations"
 (cd "$ROOT/apps/registry" && npx wrangler d1 migrations apply registry --local >/dev/null)
 

@@ -66,6 +66,13 @@ jobs:
 
       # The Worker refuses to start without these; the bootstrap hash must be
       # produced by this repo's hasher so it verifies under the Workers runtime.
+      # The Worker bundles the dashboard as static assets, so wrangler dev needs
+      # it built even though the conformance suite only exercises /v2.
+      - name: Build the dashboard
+        run: pnpm --filter @registry/web build
+
+      # The Worker refuses to start without these; the bootstrap hash must be
+      # produced by this repo's hasher so it verifies under the Workers runtime.
       - name: Configure the Worker for local runs
         run: |
           HASH="$(node scripts/hash-password.mjs 'conformance-password')"

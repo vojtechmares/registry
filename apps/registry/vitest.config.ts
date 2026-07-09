@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config";
 
@@ -6,6 +7,13 @@ import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-w
 // binding lets a setup file replay them into the throwaway D1, so the tests run
 // against exactly the tables production runs against.
 const migrationsDir = fileURLToPath(new URL("./migrations", import.meta.url));
+
+// The pool validates every binding in wrangler.jsonc as it loads the config,
+// including the dashboard's `assets.directory`. None of these tests touch the
+// dashboard, but the directory has to exist or the pool refuses to start - and
+// on a fresh checkout it does not, because it is a build artifact. Create an
+// empty one so `pnpm test` is self-contained without first building the UI.
+mkdirSync(fileURLToPath(new URL("../web/dist", import.meta.url)), { recursive: true });
 
 export default defineWorkersConfig(async () => {
   const migrations = await readD1Migrations(migrationsDir);
