@@ -1,13 +1,20 @@
 import type {
   AccessTokenSummary,
+  AuthProviders,
+  CleanupPolicy,
   CreatedAccessToken,
   LifecyclePolicy,
   ManifestDetail,
+  ProjectDetail,
+  ProjectSettings,
+  ProjectSummary,
   RegistryStats,
   RepositoryDetail,
   RepositorySummary,
+  Role,
   SessionUser,
   TagSummary,
+  UsageStats,
   UserSummary,
   Visibility,
 } from "@registry/api-contract";
@@ -96,13 +103,10 @@ export const api = {
   manifest: (name: string, digest: string) =>
     request<ManifestDetail>(`/repositories/${repoPath(name)}/manifests/${encodeURIComponent(digest)}`),
 
-  setVisibility: (name: string, visibility: Visibility) =>
-    request<{ name: string; visibility: Visibility }>(`/repositories/${repoPath(name)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ visibility }),
-    }),
-
   deleteRepository: (name: string) => request<void>(`/repositories/${repoPath(name)}`, { method: "DELETE" }),
+
+  repositoryStats: (name: string, days = 30) =>
+    request<UsageStats>(`/repositories/${repoPath(name)}/stats?days=${days}`),
 
   policy: (name: string) => request<LifecyclePolicy>(`/repositories/${repoPath(name)}/policy`),
 
@@ -128,4 +132,93 @@ export const api = {
     request<UserSummary>("/users", { method: "POST", body: JSON.stringify(input) }),
 
   deleteUser: (id: string) => request<void>(`/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  providers: () => request<AuthProviders>("/auth/providers"),
+
+  projects: () => request<{ projects: ProjectSummary[] }>("/projects").then((r) => r.projects),
+
+  project: (name: string) => request<ProjectDetail>(`/projects/${encodeURIComponent(name)}`),
+
+  createProject: (input: {
+    name: string;
+    visibility?: Visibility;
+    description?: string;
+    quotaBytes?: number | null;
+  }) => request<ProjectDetail>("/projects", { method: "POST", body: JSON.stringify(input) }),
+
+  updateProject: (name: string, settings: ProjectSettings) =>
+    request<ProjectDetail>(`/projects/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+    }),
+
+  deleteProject: (name: string) =>
+    request<void>(`/projects/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  projectStats: (name: string, days = 30) =>
+    request<UsageStats>(`/projects/${encodeURIComponent(name)}/stats?days=${days}`),
+
+  setMember: (project: string, userId: string, role: Role) =>
+    request<{ project: string; userId: string; role: Role }>(
+      `/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`,
+      { method: "PUT", body: JSON.stringify({ role }) },
+    ),
+
+  removeMember: (project: string, userId: string) =>
+    request<void>(`/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    }),
+
+  cleanupPolicy: (project: string) =>
+    request<CleanupPolicy>(`/projects/${encodeURIComponent(project)}/cleanup`),
+
+  setCleanupPolicy: (
+    project: string,
+    policy: Omit<CleanupPolicy, "project" | "nextRunAt" | "lastRunAt" | "lastResult">,
+  ) =>
+    request<CleanupPolicy>(`/projects/${encodeURIComponent(project)}/cleanup`, {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+
+  notifications: (project: string) =>
+    request<{ policies: unknown[] }>(`/projects/${encodeURIComponent(project)}/notifications`).then(
+      (r) => r.policies,
+    ),
+
+  createNotification: (
+    project: string,
+    input: { name: string; targetType: "webhook" | "email"; target: string; eventTypes: string[] },
+  ) =>
+    request<{ id: string; secret?: string }>(`/projects/${encodeURIComponent(project)}/notifications`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  deleteNotification: (project: string, id: string) =>
+    request<void>(`/projects/${encodeURIComponent(project)}/notifications/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
+  replicationRules: (project: string) =>
+    request<{ rules: unknown[] }>(`/projects/${encodeURIComponent(project)}/replication`).then(
+      (r) => r.rules,
+    ),
+
+  createReplicationRule: (project: string, input: Record<string, unknown>) =>
+    request<{ id: string }>(`/projects/${encodeURIComponent(project)}/replication`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  runReplicationRule: (project: string, id: string) =>
+    request<{ queued: boolean }>(
+      `/projects/${encodeURIComponent(project)}/replication/${encodeURIComponent(id)}`,
+      { method: "POST", body: "{}" },
+    ),
+
+  deleteReplicationRule: (project: string, id: string) =>
+    request<void>(`/projects/${encodeURIComponent(project)}/replication/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 };

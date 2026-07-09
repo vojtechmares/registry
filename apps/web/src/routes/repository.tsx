@@ -1,13 +1,10 @@
 import { Link, createRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
-import type { Visibility } from "@registry/api-contract";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
-import { Label } from "@workspace/ui/components/label";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { toast } from "@workspace/ui/components/sonner";
-import { Switch } from "@workspace/ui/components/switch";
 import {
   Table,
   TableBody,
@@ -28,21 +25,10 @@ function Repository() {
   // repository name simply fails the lookup below.
   const name = repositoryRoute.useParams()._splat ?? "";
   const { user } = useStore(sessionStore);
-  const queryClient = useQueryClient();
 
   const { data, isPending, error } = useQuery({
     queryKey: ["repository", name],
     queryFn: () => api.repository(name),
-  });
-
-  const visibility = useMutation({
-    mutationFn: (next: Visibility) => api.setVisibility(name, next),
-    onSuccess: (result) => {
-      toast.success(`${name} is now ${result.visibility}`);
-      void queryClient.invalidateQueries({ queryKey: ["repository", name] });
-      void queryClient.invalidateQueries({ queryKey: ["repositories"] });
-    },
-    onError: () => toast.error("Could not change visibility"),
   });
 
   if (isPending) return <Skeleton className="h-64 w-full" />;
@@ -68,19 +54,12 @@ function Repository() {
           </div>
         </div>
 
-        {canAdminister && (
-          <div className="flex items-center gap-2">
-            <Label htmlFor="visibility" className="text-sm">
-              Public
-            </Label>
-            <Switch
-              id="visibility"
-              checked={data.visibility === "public"}
-              disabled={visibility.isPending}
-              onCheckedChange={(checked) => visibility.mutate(checked ? "public" : "private")}
-            />
-          </div>
-        )}
+        {/* Visibility is a property of the project now, so the control lives there. */}
+        <Button asChild variant="outline" size="sm">
+          <Link to="/projects/$name" params={{ name: data.project }}>
+            {data.project} project
+          </Link>
+        </Button>
       </div>
 
       {data.tags.length > 0 && data.tags[0] !== undefined && (

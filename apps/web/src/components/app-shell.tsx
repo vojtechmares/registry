@@ -51,6 +51,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               Repositories
             </Link>
+            <Link
+              to="/projects"
+              className="rounded-md px-3 py-1.5 text-muted-foreground hover:text-foreground [&.active]:bg-muted [&.active]:text-foreground"
+            >
+              Projects
+            </Link>
             {user !== null && (
               <Link
                 to="/settings/tokens"

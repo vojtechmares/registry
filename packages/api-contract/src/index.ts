@@ -218,3 +218,8 @@ export interface CleanupPolicy {
   readonly lastRunAt: number | null;
   readonly lastResult: { tagsRemoved: number; untaggedRemoved: number } | null;
 }
+
+export interface AuthProviders {
+  readonly password: boolean;
+  readonly oidc: boolean;
+}

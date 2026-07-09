@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Input } from "@workspace/ui/components/input";
@@ -13,6 +13,11 @@ function Login() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+
+  // Whether single sign-on is configured, so the button is shown only when it works.
+  const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
+  // A message the OIDC callback may have redirected back with.
+  const callbackError = new URLSearchParams(window.location.search).get("error");
 
   const signIn = useMutation({
     mutationFn: () => api.login(username, password),
@@ -69,9 +74,9 @@ function Login() {
               />
             </div>
 
-            {message !== null && (
+            {(message ?? callbackError) !== null && (
               <p role="alert" className="text-sm text-destructive">
-                {message}
+                {message ?? callbackError}
               </p>
             )}
 
@@ -79,6 +84,20 @@ function Login() {
               {signIn.isPending ? "Signing in…" : "Sign in"}
             </Button>
           </form>
+
+          {providers.data?.oidc === true && (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                or
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <Button variant="outline" className="w-full" asChild>
+                {/* A full navigation, not a fetch: the provider needs the browser. */}
+                <a href="/api/v1/auth/oidc/start">Sign in with SSO</a>
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

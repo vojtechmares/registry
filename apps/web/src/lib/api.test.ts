@@ -85,3 +85,50 @@ describe("api client", () => {
     expect(fetchSpy.mock.calls[1]?.[0]).toBe("/api/v1/repositories?search=my%20org");
   });
 });
+
+describe("project endpoints", () => {
+  it("lists projects and unwraps the envelope", async () => {
+    const fetchSpy = mockFetch({ body: { projects: [{ name: "acme" }] } });
+    const projects = await api.projects();
+
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toBe("/api/v1/projects");
+    expect(projects).toEqual([{ name: "acme" }]);
+  });
+
+  it("patches only the settings it was given", async () => {
+    const fetchSpy = mockFetch({ body: { name: "acme" } });
+    await api.updateProject("acme", { visibility: "public" });
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/projects/acme");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(JSON.stringify({ visibility: "public" }));
+  });
+
+  it("sets a member's role by user id", async () => {
+    const fetchSpy = mockFetch({ body: { project: "acme", userId: "u1", role: "developer" } });
+    await api.setMember("acme", "u1", "developer");
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/projects/acme/members/u1");
+    expect(init.method).toBe("PUT");
+  });
+
+  it("requests project usage over a window", async () => {
+    const fetchSpy = mockFetch({ body: { scope: "acme", days: 7 } });
+    await api.projectStats("acme", 7);
+
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toBe("/api/v1/projects/acme/stats?days=7");
+  });
+
+  it("reads whether single sign-on is available", async () => {
+    const fetchSpy = mockFetch({ body: { password: true, oidc: true } });
+    const providers = await api.providers();
+
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toBe("/api/v1/auth/providers");
+    expect(providers.oidc).toBe(true);
+  });
+});
