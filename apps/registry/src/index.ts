@@ -5,6 +5,7 @@ import { readConfig } from "./auth/config.js";
 import { resolvePrincipal, type Principal } from "./auth/principal.js";
 import { AuthStore } from "./auth/store.js";
 import { readCoreConfig, type Env } from "./env.js";
+import { EventCollector } from "./events.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
 import { runLifecycle } from "./lifecycle/policies.js";
 import { ProjectPolicy } from "./policy.js";
@@ -14,6 +15,8 @@ import { handleToken } from "./routes/token.js";
 import { R2ContentStore } from "./storage/content.js";
 import { D1MetadataStore } from "./storage/metadata.js";
 import { ProjectStore } from "./storage/projects.js";
+import { SignatureIndex } from "./storage/signatures.js";
+import { StatsStore } from "./storage/stats.js";
 import { DurableObjectUploadStore } from "./storage/uploads.js";
 
 export { RateLimiterObject } from "./durable-objects/rate-limiter.js";
@@ -24,9 +27,9 @@ function notFound(): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
-      return await route(request, env);
+      return await route(request, env, ctx);
     } catch (error) {
       if (error instanceof OciError) return errorResponse(error);
       console.error("unhandled error", error);
@@ -47,13 +50,14 @@ export default {
       (async () => {
         const retired = await runLifecycle(env);
         const reclaimed = await collectGarbage(env);
-        console.log("maintenance complete", { retired, reclaimed });
+        const pruned = await new StatsStore(env.DB).prune();
+        console.log("maintenance complete", { retired, reclaimed, pruned });
       })(),
     );
   },
 } satisfies ExportedHandler<Env>;
 
-async function route(request: Request, env: Env): Promise<Response> {
+async function route(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.pathname === "/healthz") return new Response("ok", { headers: { "Content-Type": "text/plain" } });
@@ -92,8 +96,26 @@ async function route(request: Request, env: Env): Promise<Response> {
     return handleCatalog(request, env, principal, createAuthorize({ principal, store, config }));
   }
 
-  const response = await handleRegistryRequest(request, registryContext(env, principal, store, request));
+  // The counters are written after the response is on its way. A registry that
+  // cannot count must still be able to serve, and a `docker pull` must never
+  // wait on a statistic.
+  const events = new EventCollector();
+  const response = await handleRegistryRequest(
+    request,
+    registryContext(env, principal, store, request, events),
+  );
+  if (events.events.length > 0) ctx.waitUntil(recordEvents(env, events));
+
   return response ?? notFound();
+}
+
+async function recordEvents(env: Env, events: EventCollector): Promise<void> {
+  try {
+    await new StatsStore(env.DB).record(events.events);
+  } catch (error) {
+    // Losing a counter is not worth an unhandled rejection in the isolate.
+    console.error("failed to record usage", error);
+  }
 }
 
 /**
@@ -111,6 +133,7 @@ function registryContext(
   principal: Principal,
   store: AuthStore,
   request: Request,
+  events: EventCollector,
 ): RegistryContext {
   return {
     metadata: new D1MetadataStore(env.DB),
@@ -118,6 +141,7 @@ function registryContext(
     uploads: new DurableObjectUploadStore(env.UPLOAD_SESSION),
     config: readCoreConfig(env),
     authorize: createAuthorize({ principal, store, config: readConfig(env, request) }),
-    policy: new ProjectPolicy(new ProjectStore(env.DB)),
+    policy: new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB)),
+    events,
   };
 }

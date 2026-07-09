@@ -4,6 +4,7 @@ import type { Identity, Principal } from "../auth/principal.js";
 import type { AuthStore } from "../auth/store.js";
 import type { AdminStore, Viewer } from "../storage/admin.js";
 import type { ProjectStore } from "../storage/projects.js";
+import type { StatsStore } from "../storage/stats.js";
 import {
   badRequest,
   conflict,
@@ -21,6 +22,14 @@ export interface ProjectContext {
   readonly projects: ProjectStore;
   readonly admin: AdminStore;
   readonly auth: AuthStore;
+  readonly stats: StatsStore;
+}
+
+/** `?days=` bounded to something a chart can hold and the table can still serve. */
+export function windowDays(url: URL): number {
+  const raw = Number(url.searchParams.get("days") ?? "30");
+  if (!Number.isSafeInteger(raw) || raw < 1) return 30;
+  return Math.min(raw, 365);
 }
 
 export function viewerOf(principal: Principal): Viewer | null {
@@ -76,10 +85,30 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
 
   if (section === undefined) return projectDetail(ctx, name);
   if (section === "repositories" && target === undefined) return projectRepositories(ctx, name);
+  if (section === "stats" && target === undefined) return projectStats(ctx, name);
   if (section === "members" && target === undefined) return listMembers(ctx, name);
   if (section === "members" && target !== undefined) return member(ctx, name, target);
 
   throw notFound();
+}
+
+/**
+ * Activity for a project, and for each image inside it.
+ *
+ * Gated by the same rule that decides whether the project is visible at all:
+ * pull counts disclose how a private project is used, and a project nobody may
+ * see must not answer questions about itself.
+ */
+async function projectStats(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+
+  const viewerId = ctx.principal.kind === "anonymous" ? null : ctx.principal.identity.id;
+  const project = await ctx.projects.get(name, viewerId);
+  if (project === null || !canView(ctx.principal, project.visibility, project.role, name)) {
+    throw notFound(`project "${name}" does not exist`);
+  }
+
+  return Response.json(await ctx.stats.forProject(name, windowDays(ctx.url)));
 }
 
 async function listProjects(ctx: ProjectContext): Promise<Response> {

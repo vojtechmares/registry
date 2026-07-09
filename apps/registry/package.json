@@ -17,7 +17,8 @@
     "@registry/api-contract": "workspace:*",
     "@registry/oci": "workspace:*",
     "@registry/projects": "workspace:*",
-    "@registry/registry-core": "workspace:*"
+    "@registry/registry-core": "workspace:*",
+    "@registry/signing": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.9.0",

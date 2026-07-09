@@ -1,7 +1,9 @@
 import { OciError } from "@registry/oci";
 import { formatBytes, projectOf, quotaAdmits } from "@registry/projects";
 import type { ManifestRecord, RegistryPolicy } from "@registry/registry-core";
+import { needsSignatureOnPull, needsSignatureOnPush } from "@registry/signing";
 import type { ProjectRules, ProjectStore } from "./storage/projects.js";
+import type { SignatureIndex } from "./storage/signatures.js";
 
 /**
  * A project is out of space.
@@ -34,7 +36,10 @@ export function unsignedArtifact(repository: string, digest: string, action: str
 export class ProjectPolicy implements RegistryPolicy {
   private readonly cache = new Map<string, Promise<ProjectRules | null>>();
 
-  constructor(private readonly projects: ProjectStore) {}
+  constructor(
+    private readonly projects: ProjectStore,
+    private readonly signatures: SignatureIndex,
+  ) {}
 
   private rulesFor(repository: string): Promise<ProjectRules | null> {
     const project = projectOf(repository);
@@ -69,11 +74,36 @@ export class ProjectPolicy implements RegistryPolicy {
     );
   }
 
-  async beforeManifestPush(_repository: string, _record: ManifestRecord, _tag: string | null): Promise<void> {
-    // Signature rules land here.
+  /**
+   * Refuses to move a tag onto a manifest nothing has signed.
+   *
+   * The rule bites at the tag rather than at the push, because a signature
+   * names the digest it signs and so the digest must reach the registry first.
+   * `docker push repo:v1` is refused; `push by digest, cosign sign, tag` is not.
+   */
+  async beforeManifestPush(repository: string, record: ManifestRecord, tag: string | null): Promise<void> {
+    const rules = await this.rulesFor(repository);
+    if (rules?.requireSignaturePush !== true) return;
+    if (!needsSignatureOnPush(record, tag)) return;
+
+    if (!(await this.signatures.isSigned(repository, record.digest))) {
+      throw unsignedArtifact(repository, record.digest, "tagged");
+    }
   }
 
-  async beforeManifestPull(_repository: string, _record: ManifestRecord): Promise<void> {
-    // Signature rules land here.
+  /** Refuses to serve a manifest nothing has signed. */
+  async beforeManifestPull(repository: string, record: ManifestRecord): Promise<void> {
+    const rules = await this.rulesFor(repository);
+    if (rules?.requireSignaturePull !== true) return;
+    if (!needsSignatureOnPull(record)) return;
+
+    // The layout that predates the referrers API leaves nothing on the manifest
+    // to say it is a signature - only the tag that points at it. Refusing to
+    // serve that manifest would deny a verifier the very thing it came for.
+    if (await this.signatures.isAttachment(repository, record.digest)) return;
+
+    if (!(await this.signatures.isSigned(repository, record.digest))) {
+      throw unsignedArtifact(repository, record.digest, "pulled");
+    }
   }
 }

@@ -16,7 +16,8 @@ import { AuthStore } from "../auth/store.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
 import { ProjectStore } from "../storage/projects.js";
-import { handleProjects, viewerOf } from "./projects.js";
+import { StatsStore } from "../storage/stats.js";
+import { handleProjects, viewerOf, windowDays } from "./projects.js";
 import {
   ApiError,
   badRequest,
@@ -76,12 +77,25 @@ export async function handleApiRequest(
   const auth = new AuthStore(env.DB);
   const admin = new AdminStore(env.DB);
   const projects = new ProjectStore(env.DB);
+  const usage = new StatsStore(env.DB);
   const path = url.pathname.slice(PREFIX.length);
   const secure = url.protocol === "https:";
 
   try {
     const principal = await resolveApiPrincipal(request, auth, config);
-    return await dispatch({ request, url, path, principal, auth, admin, projects, config, secure, env });
+    return await dispatch({
+      request,
+      url,
+      path,
+      principal,
+      auth,
+      admin,
+      projects,
+      stats: usage,
+      config,
+      secure,
+      env,
+    });
   } catch (error) {
     if (error instanceof ApiError) {
       return Response.json({ error: error.code, message: error.message }, { status: error.status });
@@ -101,6 +115,7 @@ interface Context {
   auth: AuthStore;
   admin: AdminStore;
   projects: ProjectStore;
+  stats: StatsStore;
   config: RegistryConfig;
   secure: boolean;
   env: Env;
@@ -134,6 +149,9 @@ async function dispatch(ctx: Context): Promise<Response> {
 
     const policy = /^(.+)\/policy$/.exec(rest);
     if (policy !== null) return repositoryPolicy(ctx, policy[1]!);
+
+    const usage = /^(.+)\/stats$/.exec(rest);
+    if (usage !== null) return repositoryStats(ctx, usage[1]!);
 
     return repository(ctx, rest);
   }
@@ -233,6 +251,14 @@ async function getTags(ctx: Context, rawName: string): Promise<Response> {
   const name = validName(rawName);
   await authorizeFor(ctx)(name, "pull");
   return Response.json({ tags: await ctx.admin.tags(name) });
+}
+
+/** Activity for one image. Gated by the right to pull it: usage is information about it. */
+async function repositoryStats(ctx: Context, rawName: string): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  const name = validName(rawName);
+  await authorizeFor(ctx)(name, "pull");
+  return Response.json(await ctx.stats.forRepository(name, windowDays(ctx.url)));
 }
 
 async function getManifest(ctx: Context, rawName: string, digest: string): Promise<Response> {

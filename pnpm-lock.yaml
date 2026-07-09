@@ -35,6 +35,9 @@ importers:
       '@registry/registry-core':
         specifier: workspace:*
         version: link:../../packages/registry-core
+      '@registry/signing':
+        specifier: workspace:*
+        version: link:../../packages/signing
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.9.0
@@ -154,6 +157,19 @@ importers:
         version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
 
   packages/registry-core:
+    dependencies:
+      '@registry/oci':
+        specifier: workspace:*
+        version: link:../oci
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
+
+  packages/signing:
     dependencies:
       '@registry/oci':
         specifier: workspace:*

@@ -159,3 +159,36 @@ export interface ApiErrorBody {
   readonly error: string;
   readonly message: string;
 }
+
+/** One day of activity. `day` is an ISO calendar date in UTC. */
+export interface UsagePoint {
+  readonly day: string;
+  readonly pulls: number;
+  readonly pushes: number;
+  readonly deletes: number;
+}
+
+export interface UsageTotals {
+  readonly pulls: number;
+  readonly pushes: number;
+  readonly deletes: number;
+}
+
+/** A repository's share of a project's activity, for the per-image breakdown. */
+export interface RepositoryUsage extends UsageTotals {
+  readonly repository: string;
+  readonly sizeBytes: number;
+}
+
+export interface UsageStats {
+  /** The project or repository these numbers describe. */
+  readonly scope: string;
+  readonly days: number;
+  readonly totals: UsageTotals;
+  /** Bytes stored, counted once per distinct blob within the scope. */
+  readonly storageBytes: number;
+  /** One point per day in the window, including the days with no activity. */
+  readonly series: readonly UsagePoint[];
+  /** Present for a project, absent for a single repository. */
+  readonly repositories?: readonly RepositoryUsage[];
+}
