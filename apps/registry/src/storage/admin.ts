@@ -11,6 +11,19 @@ import type {
 } from "@registry/api-contract";
 import { parseScopes, type Scope } from "../auth/scopes.js";
 
+/**
+ * Escapes a literal for use inside a `LIKE` pattern, paired with `ESCAPE '\'`.
+ *
+ * `_` and `%` are `LIKE` wildcards, and a username may legitimately contain `_`.
+ * Interpolating one unescaped turns the ownership filter `alice/%` into a
+ * pattern that also matches a different tenant's namespace (`a_ice/%` matching
+ * `alice`), disclosing repository names across tenants. Escaping keeps the
+ * prefix a literal.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 function json<T>(raw: string | null): T | null {
   if (raw === null) return null;
   try {
@@ -75,15 +88,15 @@ export class AdminStore {
     const bindings: unknown[] = [];
 
     if (options.search !== null && options.search !== "") {
-      filters.push("r.name LIKE ?");
-      bindings.push(`%${options.search}%`);
+      filters.push("r.name LIKE ? ESCAPE '\\'");
+      bindings.push(`%${escapeLike(options.search)}%`);
     }
 
     if (options.visibleTo === null) {
       filters.push("r.visibility = 'public'");
     } else if (!options.visibleTo.isAdmin) {
-      filters.push("(r.visibility = 'public' OR r.name = ? OR r.name LIKE ?)");
-      bindings.push(options.visibleTo.username, `${options.visibleTo.username}/%`);
+      filters.push("(r.visibility = 'public' OR r.name = ? OR r.name LIKE ? ESCAPE '\\')");
+      bindings.push(options.visibleTo.username, `${escapeLike(options.visibleTo.username)}/%`);
     }
 
     const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
@@ -477,8 +490,8 @@ export class AdminStore {
     if (viewer === null) {
       conditions.push("visibility = 'public'");
     } else if (!viewer.isAdmin) {
-      conditions.push("(visibility = 'public' OR name = ? OR name LIKE ?)");
-      bindings.push(viewer.username, `${viewer.username}/%`);
+      conditions.push("(visibility = 'public' OR name = ? OR name LIKE ? ESCAPE '\\')");
+      bindings.push(viewer.username, `${escapeLike(viewer.username)}/%`);
     }
 
     const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;

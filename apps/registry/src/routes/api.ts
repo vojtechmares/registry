@@ -199,7 +199,13 @@ async function login(ctx: Context): Promise<Response> {
   }
 
   const principal = await authenticateCredentials(body.username, body.password, ctx.auth, ctx.config);
-  const identity = requireIdentity(principal);
+  // A machine token authenticates through the same credential path (it may be
+  // passed as the password), but it must never be exchanged for a session
+  // cookie: the cookie resolves back as a `user` principal, which would strip
+  // the token's scope confinement and hand it the full control plane. Rejecting
+  // non-user principals here is what keeps `requireUser` on the other routes
+  // meaningful.
+  const identity = requireUser(principal);
 
   // Give the bootstrap administrator a real row so it can own access tokens.
   if (identity.id === "bootstrap") await ctx.admin.ensureBootstrapUser(identity.username);

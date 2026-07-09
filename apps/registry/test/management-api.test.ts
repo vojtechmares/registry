@@ -67,6 +67,18 @@ describe("control plane rejects machine tokens", () => {
     expect(create.status).toBe(403);
   });
 
+  it("will not exchange a machine token for a browser session", async () => {
+    // The token is passed as the login password. Were a session minted, its
+    // cookie would resolve as a full `user` principal and shed the token's
+    // scopes - laundering a scoped credential into an admin session.
+    const response = await call("POST", "/api/v1/auth/login", {
+      headers: json,
+      body: JSON.stringify({ username: "x", password: adminToken }),
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+  });
+
   it("still admits the human administrator over Basic auth", async () => {
     const response = await call("GET", "/api/v1/stats", {
       headers: { Authorization: basic(ADMIN, ADMIN_PASSWORD) },
