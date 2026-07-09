@@ -103,19 +103,14 @@ export function isAllowedWebhookUrl(raw: string): boolean {
   if (hostname === "" || BLOCKED_HOSTNAMES.has(hostname)) return false;
   if (BLOCKED_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) return false;
 
-  // `URL` keeps the brackets on an IPv6 literal.
-  if (hostname.startsWith("[")) {
-    const address = hostname.slice(1, -1);
-    if (
-      address === "::1" ||
-      address.startsWith("fc") ||
-      address.startsWith("fd") ||
-      address.startsWith("fe80")
-    ) {
-      return false;
-    }
-    return true;
-  }
+  // `URL` keeps the brackets on an IPv6 literal, and every one of them is
+  // refused. IPv6 has too many ways to spell an IPv4 address for a filter to
+  // enumerate: `::ffff:127.0.0.1` normalises to `::ffff:7f00:1`, and beside it
+  // sit the IPv4-compatible form, NAT64, 6to4 and Teredo, each of which reaches
+  // loopback through a prefix that looks like nothing in particular. A webhook
+  // receiver on the public internet is named by DNS, never by an IPv6 literal,
+  // so refusing the lot costs nothing and closes all of them at once.
+  if (hostname.startsWith("[")) return false;
 
   const octets = parseIPv4(hostname);
   if (octets !== null) return !isPrivateIPv4(octets);

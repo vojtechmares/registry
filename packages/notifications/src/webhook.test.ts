@@ -60,6 +60,21 @@ describe("isAllowedWebhookUrl", () => {
     expect(isAllowedWebhookUrl("https://169.254.169.254/latest/meta-data")).toBe(false);
   });
 
+  it("refuses every IPv6 literal, however it spells an address", () => {
+    // `::ffff:127.0.0.1` is loopback wearing a hat, and `URL` normalises it to
+    // `[::ffff:7f00:1]` before any filter gets to look. The compatible form,
+    // NAT64, 6to4 and Teredo all do the same trick with different prefixes.
+    expect(isAllowedWebhookUrl("https://[::ffff:127.0.0.1]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[::ffff:10.0.0.1]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[::ffff:169.254.169.254]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[0:0:0:0:0:ffff:7f00:1]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[64:ff9b::7f00:1]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[::]/hook")).toBe(false);
+    expect(isAllowedWebhookUrl("https://[fd00::1]/hook")).toBe(false);
+    // And a perfectly ordinary public one, which a receiver would never use.
+    expect(isAllowedWebhookUrl("https://[2606:4700::1]/hook")).toBe(false);
+  });
+
   it("refuses private address ranges", () => {
     expect(isAllowedWebhookUrl("https://10.0.0.5/hook")).toBe(false);
     expect(isAllowedWebhookUrl("https://192.168.1.1/hook")).toBe(false);
