@@ -15,7 +15,10 @@ jobs:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
     steps:
+      # Full history, so the append-only migration check can read the base branch.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -25,6 +28,11 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # A merged migration must never change: the database it already ran
+      # against is out of reach, and editing the file only diverges the two.
+      - name: Migration hygiene
+        run: node scripts/check-migrations.mjs "origin/${{ github.base_ref || 'main' }}"
 
       - name: Lint and check formatting (oxlint, oxfmt)
         run: pnpm lint

@@ -17,7 +17,8 @@
     "format": "oxlint --fix && oxfmt --write .",
     "dev": "pnpm --filter @registry/worker dev",
     "conformance": "./scripts/conformance.sh",
-    "deploy": "pnpm --filter @registry/worker deploy"
+    "deploy": "pnpm --filter @registry/worker deploy",
+    "check:migrations": "node scripts/check-migrations.mjs"
   },
   "devDependencies": {
     "oxfmt": "0.56.0",
