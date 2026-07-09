@@ -12,6 +12,16 @@ import {
   readSessionCookie,
   verifySessionCookie,
 } from "../auth/session.js";
+import {
+  OidcError,
+  completeFlow,
+  flowCookie,
+  isAdminByGroups,
+  readOidcConfig,
+  safeNext,
+  startFlow,
+  usernameFor,
+} from "../auth/oidc.js";
 import { AuthStore } from "../auth/store.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
@@ -149,6 +159,9 @@ async function dispatch(ctx: Context): Promise<Response> {
   if (path === "/auth/login") return login(ctx);
   if (path === "/auth/logout") return logout(ctx);
   if (path === "/auth/session") return session(ctx);
+  if (path === "/auth/providers") return providers(ctx);
+  if (path === "/auth/oidc/start") return oidcStart(ctx);
+  if (path === "/auth/oidc/callback") return oidcCallback(ctx);
   if (path === "/stats") return stats(ctx);
   if (path === "/repositories") return listRepositories(ctx);
   if (path === "/tokens") return request.method === "GET" ? listTokens(ctx) : createToken(ctx);
@@ -217,6 +230,90 @@ async function logout(ctx: Context): Promise<Response> {
 async function session(ctx: Context): Promise<Response> {
   const identity = requireIdentity(ctx.principal);
   return Response.json({ id: identity.id, username: identity.username, isAdmin: identity.isAdmin });
+}
+
+/** What the sign-in page should offer. Unauthenticated: it is asked before anyone is signed in. */
+async function providers(ctx: Context): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  return Response.json({ password: true, oidc: readOidcConfig(ctx.env, ctx.url) !== null });
+}
+
+/**
+ * Sends the browser to the identity provider.
+ *
+ * A redirect rather than a JSON body carrying a URL, so the flow works from a
+ * plain link and needs no script.
+ */
+async function oidcStart(ctx: Context): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+
+  const config = readOidcConfig(ctx.env, ctx.url);
+  if (config === null) throw notFound("single sign-on is not configured");
+
+  const next = safeNext(ctx.url.searchParams.get("next"));
+  const flow = await startFlow(config, ctx.config, next, ctx.secure);
+
+  return new Response(null, {
+    status: 302,
+    headers: { Location: flow.authorizeUrl, "Set-Cookie": flow.cookie, "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * Where the provider sends the browser back.
+ *
+ * On success the flow cookie is cleared and a session cookie takes its place;
+ * on failure the browser lands back on the sign-in page with a message, because
+ * a JSON error body is not something a person who just clicked "Sign in" can do
+ * anything with.
+ */
+async function oidcCallback(ctx: Context): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+
+  const config = readOidcConfig(ctx.env, ctx.url);
+  if (config === null) throw notFound("single sign-on is not configured");
+
+  let claims;
+  let next: string;
+  try {
+    ({ claims, next } = await completeFlow(config, ctx.config, ctx.request));
+  } catch (error) {
+    if (!(error instanceof OidcError)) throw error;
+    const message = encodeURIComponent(error.message);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `/login?error=${message}`,
+        "Set-Cookie": flowCookie("", ctx.secure, 0),
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  const user = await ctx.admin.findOrCreateOidcUser({
+    issuer: claims.iss,
+    subject: claims.sub,
+    username: usernameFor(claims),
+    email: claims.email ?? null,
+    isAdmin: isAdminByGroups(claims, config),
+  });
+
+  if (user.disabled) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: "/login?error=account+disabled",
+        "Set-Cookie": flowCookie("", ctx.secure, 0),
+      },
+    });
+  }
+
+  const identity = { id: user.id, username: user.username, isAdmin: user.isAdmin };
+  const headers = new Headers({ Location: next, "Cache-Control": "no-store" });
+  headers.append("Set-Cookie", flowCookie("", ctx.secure, 0));
+  headers.append("Set-Cookie", await createSessionCookie(identity, ctx.config, ctx.secure));
+
+  return new Response(null, { status: 302, headers });
 }
 
 async function stats(ctx: Context): Promise<Response> {

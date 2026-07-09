@@ -35,6 +35,9 @@ importers:
       '@registry/oci':
         specifier: workspace:*
         version: link:../../packages/oci
+      '@registry/oidc':
+        specifier: workspace:*
+        version: link:../../packages/oidc
       '@registry/projects':
         specifier: workspace:*
         version: link:../../packages/projects
@@ -168,6 +171,15 @@ importers:
         version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
 
   packages/oci:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
+
+  packages/oidc:
     devDependencies:
       typescript:
         specifier: ^5.9.3

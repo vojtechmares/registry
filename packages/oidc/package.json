@@ -1,0 +1,18 @@
+{
+  "name": "@registry/oidc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenID Connect: discovery, PKCE, and ID token verification",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

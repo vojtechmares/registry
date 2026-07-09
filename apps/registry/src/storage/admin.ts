@@ -511,6 +511,83 @@ export class AdminStore {
   }
 
   /**
+   * Finds or creates the local account behind a federated identity.
+   *
+   * Keyed on (issuer, subject): a subject is unique only within its issuer, and
+   * keying on the subject alone would let a second provider claim an account by
+   * minting a token for the same subject string.
+   *
+   * A federated account has no password. `password_hash` holds a marker that no
+   * PBKDF2 verification can match, so the account cannot also be reached by
+   * guessing a password it does not have.
+   */
+  async findOrCreateOidcUser(input: {
+    issuer: string;
+    subject: string;
+    username: string;
+    email: string | null;
+    isAdmin: boolean;
+  }): Promise<UserSummary & { disabled: boolean }> {
+    const existing = await this.db
+      .prepare(
+        "SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
+      )
+      .bind(input.issuer, input.subject)
+      .first<{
+        id: string;
+        username: string;
+        email: string | null;
+        is_admin: number;
+        disabled: number;
+        created_at: number;
+      }>();
+
+    if (existing !== null) {
+      // The provider is the authority on group membership, so administrator
+      // status is re-read on every sign-in rather than frozen at creation.
+      if ((existing.is_admin === 1) !== input.isAdmin) {
+        await this.db
+          .prepare("UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?")
+          .bind(input.isAdmin ? 1 : 0, Date.now(), existing.id)
+          .run();
+      }
+      return {
+        id: existing.id,
+        username: existing.username,
+        email: existing.email,
+        isAdmin: input.isAdmin,
+        disabled: existing.disabled === 1,
+        createdAt: existing.created_at,
+      };
+    }
+
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    const username = await this.availableUsername(input.username);
+
+    await this.db
+      .prepare(
+        `INSERT INTO users
+           (id, username, email, password_hash, is_admin, disabled, created_at, updated_at, oidc_issuer, oidc_subject)
+         VALUES (?, ?, ?, 'external:oidc', ?, 0, ?, ?, ?, ?)`,
+      )
+      .bind(id, username, input.email, input.isAdmin ? 1 : 0, now, now, input.issuer, input.subject)
+      .run();
+
+    return { id, username, email: input.email, isAdmin: input.isAdmin, disabled: false, createdAt: now };
+  }
+
+  /** `alice`, then `alice-2`, and so on. A username is a namespace, and two people cannot share one. */
+  private async availableUsername(preferred: string): Promise<string> {
+    for (let suffix = 0; suffix < 50; suffix++) {
+      const candidate = suffix === 0 ? preferred : `${preferred}-${suffix + 1}`;
+      const taken = await this.db.prepare("SELECT 1 FROM users WHERE username = ?").bind(candidate).first();
+      if (taken === null) return candidate;
+    }
+    return `user-${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  /**
    * Materialises the bootstrap administrator as a real row.
    *
    * The bootstrap admin authenticates against a secret, not the database, so it

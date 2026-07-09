@@ -43,6 +43,16 @@ export interface Env {
   /** Secret. */
   readonly EMAIL_API_KEY?: string;
   readonly EMAIL_FROM?: string;
+
+  /** Single sign-on. All of issuer, client id and secret, or none of them. */
+  readonly OIDC_ISSUER?: string;
+  readonly OIDC_CLIENT_ID?: string;
+  /** Secret. */
+  readonly OIDC_CLIENT_SECRET?: string;
+  /** Defaults to `<this origin>/api/v1/auth/oidc/callback`. */
+  readonly OIDC_REDIRECT_URI?: string;
+  /** A user whose `groups` claim contains one of these is an administrator. */
+  readonly OIDC_ADMIN_GROUPS?: string;
 }
 
 export function flag(value: string | undefined, fallback: boolean): boolean {

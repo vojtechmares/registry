@@ -18,6 +18,7 @@
     "@registry/cron": "workspace:*",
     "@registry/notifications": "workspace:*",
     "@registry/oci": "workspace:*",
+    "@registry/oidc": "workspace:*",
     "@registry/projects": "workspace:*",
     "@registry/registry-core": "workspace:*",
     "@registry/replication": "workspace:*",

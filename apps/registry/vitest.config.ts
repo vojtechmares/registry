@@ -37,6 +37,12 @@ export default defineWorkersConfig(async () => {
               // Object directly. Everywhere else it would only add latency and
               // flakiness to requests that are not testing it.
               RATE_LIMIT_ENABLED: "false",
+              // Single sign-on, so the OIDC routes are live under test. The
+              // provider itself is stubbed with `fetch`.
+              OIDC_ISSUER: "https://idp.test",
+              OIDC_CLIENT_ID: "registry-client",
+              OIDC_CLIENT_SECRET: "test-client-secret",
+              OIDC_ADMIN_GROUPS: "platform-admins",
               TEST_MIGRATIONS: migrations,
             },
           },
