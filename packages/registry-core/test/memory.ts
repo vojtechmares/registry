@@ -102,7 +102,7 @@ export class MemoryMetadataStore implements MetadataStore {
     for (const [repository, digests] of this.blobLinks) {
       if (digests.has(digest)) linking.push(repository);
     }
-    return linking.sort().slice(0, limit);
+    return linking.toSorted().slice(0, limit);
   }
 
   async getLinkedBlob(repository: string, digest: string): Promise<BlobRecord | null> {
@@ -184,7 +184,7 @@ export class MemoryMetadataStore implements MetadataStore {
     if (stored?.delete(digest) !== true) return false;
     const tags = this.tags.get(repository);
     if (tags !== undefined) {
-      for (const [tag, target] of [...tags]) if (target === digest) tags.delete(tag);
+      for (const [tag, target] of tags) if (target === digest) tags.delete(tag);
     }
     return true;
   }
@@ -194,7 +194,7 @@ export class MemoryMetadataStore implements MetadataStore {
   }
 
   async listTags(repository: string, options: { limit: number; last?: string }): Promise<TagPage> {
-    const all = [...(this.tags.get(repository)?.keys() ?? [])].sort();
+    const all = [...(this.tags.get(repository)?.keys() ?? [])].toSorted();
     const start = options.last === undefined ? 0 : all.findIndex((tag) => tag > options.last!);
     const from = start === -1 ? all.length : start;
     const tags = all.slice(from, from + options.limit);

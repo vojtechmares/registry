@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 110,
+  "singleQuote": false,
+  "trailingComma": "all",
+  "semi": true,
+  "sortPackageJson": false,
+  "ignorePatterns": ["references/", "node_modules/", "dist/", ".wrangler/", "pnpm-lock.yaml"]
+}

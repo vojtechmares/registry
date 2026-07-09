@@ -13,14 +13,15 @@
     "build": "pnpm -r --filter './apps/*' build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "lint": "prettier --check .",
-    "format": "prettier --write .",
+    "lint": "oxlint && oxfmt --check .",
+    "format": "oxlint --fix && oxfmt --write .",
     "dev": "pnpm --filter @registry/worker dev",
     "conformance": "./scripts/conformance.sh",
     "deploy": "pnpm --filter @registry/worker deploy"
   },
   "devDependencies": {
-    "prettier": "^3.8.3",
+    "oxfmt": "0.56.0",
+    "oxlint": "1.71.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

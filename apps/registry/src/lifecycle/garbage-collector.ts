@@ -1,5 +1,6 @@
 import type { Env } from "../env.js";
 import { MANIFEST_PREFIX, STAGING_PREFIX, UPLOAD_PREFIX } from "../keys.js";
+import { placeholders } from "../storage/sql.js";
 
 /**
  * A blob exists in R2 for a moment before the metadata store links it: the
@@ -146,8 +147,9 @@ async function collectOrphanedManifestObjects(env: Env, cutoff: number): Promise
 
 async function liveManifestDigests(env: Env, digests: readonly string[]): Promise<Set<string>> {
   if (digests.length === 0) return new Set();
-  const placeholders = new Array(digests.length).fill("?").join(", ");
-  const rows = await env.DB.prepare(`SELECT DISTINCT digest FROM manifests WHERE digest IN (${placeholders})`)
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT digest FROM manifests WHERE digest IN (${placeholders(digests.length)})`,
+  )
     .bind(...digests)
     .all<{ digest: string }>();
   return new Set(rows.results.map((row) => row.digest));
@@ -197,8 +199,9 @@ async function collectAbandonedUploads(env: Env, cutoff: number): Promise<number
 
 async function referencedStorageKeys(env: Env, keys: readonly string[]): Promise<Set<string>> {
   if (keys.length === 0) return new Set();
-  const placeholders = new Array(keys.length).fill("?").join(", ");
-  const rows = await env.DB.prepare(`SELECT storage_key FROM blobs WHERE storage_key IN (${placeholders})`)
+  const rows = await env.DB.prepare(
+    `SELECT storage_key FROM blobs WHERE storage_key IN (${placeholders(keys.length)})`,
+  )
     .bind(...keys)
     .all<{ storage_key: string }>();
   return new Set(rows.results.map((row) => row.storage_key));

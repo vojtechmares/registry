@@ -16,12 +16,11 @@ export function CopyButton({ value, label = "Copy", className }: CopyButtonProps
 
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  const copy = useCallback(() => {
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    });
+  const copy = useCallback(async () => {
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
   }, [value]);
 
   return (
@@ -30,7 +29,7 @@ export function CopyButton({ value, label = "Copy", className }: CopyButtonProps
       variant="ghost"
       size="icon"
       aria-label={copied ? "Copied" : label}
-      onClick={copy}
+      onClick={() => void copy()}
       className={cn("size-7 shrink-0", className)}
     >
       {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}

@@ -4,7 +4,9 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
+    // ES2023 for the non-mutating array methods (`toSorted`), which both
+    // workerd and every browser the dashboard targets have shipped.
+    "lib": ["ES2023"],
     "types": [],
 
     "strict": true,

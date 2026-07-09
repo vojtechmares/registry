@@ -5,6 +5,7 @@ import type {
   ReferrerRecord,
   TagPage,
 } from "@registry/registry-core";
+import { placeholders } from "./sql.js";
 
 interface BlobRow {
   digest: string;
@@ -40,11 +41,6 @@ function toManifestRecord(row: ManifestRow): ManifestRecord {
     subjectDigest: row.subject_digest,
     annotations: parseAnnotations(row.annotations),
   };
-}
-
-/** `IN (?, ?, ?)` for a bound list. SQLite has no array parameter. */
-function placeholders(count: number): string {
-  return new Array(count).fill("?").join(", ");
 }
 
 export class D1MetadataStore implements MetadataStore {

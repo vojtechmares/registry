@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "react", "jsx-a11y", "vitest"],
+  "env": { "es2024": true },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "rules": {
+    // A floating promise in a Worker is a request that returns before its work
+    // is done, or an unhandled rejection that takes the isolate down.
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "no-await-in-loop": "off",
+    "unicorn/no-null": "off",
+    "unicorn/prefer-string-raw": "off",
+    "unicorn/filename-case": "off",
+    "unicorn/no-array-callback-reference": "off",
+    "unicorn/prefer-top-level-await": "off",
+    "import/no-cycle": "error",
+    "eslint/no-console": "off",
+    // The automatic JSX runtime means `React` is never in scope, by design.
+    "react/react-in-jsx-scope": "off",
+    // `_splat` is TanStack Router's name for a wildcard segment.
+    "eslint/no-underscore-dangle": "off",
+    // `import "./index.css"` is how Vite is told to bundle the stylesheet.
+    "import/no-unassigned-import": "off",
+    // Vitest's `expect(value, message)` overload is real; the rule assumes Jest's.
+    "vitest/valid-expect": "off",
+    "vitest/require-mock-type-parameters": "off"
+  },
+  "ignorePatterns": [
+    "references/**",
+    "**/dist/**",
+    "**/.wrangler/**",
+    "**/node_modules/**",
+    "**/*.d.ts",
+    "**/routeTree.gen.ts"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test/**"],
+      "rules": {
+        "typescript/no-non-null-assertion": "off",
+        // Asserting a precondition inside `beforeEach` is how a fixture fails loudly.
+        "vitest/no-standalone-expect": "off"
+      }
+    }
+  ]
+}
