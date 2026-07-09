@@ -1,10 +1,12 @@
 import type { CleanupRule, ProjectSettings, Visibility } from "@registry/api-contract";
 import { isValidCron } from "@registry/cron";
+import { EVENT_TYPES, type EventType, isAllowedWebhookUrl, isEventType } from "@registry/notifications";
 import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/projects";
 import { parseRange } from "@registry/semver";
 import type { Identity, Principal } from "../auth/principal.js";
 import type { AuthStore } from "../auth/store.js";
 import type { AdminStore, Viewer } from "../storage/admin.js";
+import type { NotificationStore } from "../notifications/store.js";
 import type { CleanupPolicyInput, CleanupStore } from "../storage/cleanup.js";
 import type { ProjectStore } from "../storage/projects.js";
 import type { StatsStore } from "../storage/stats.js";
@@ -27,6 +29,7 @@ export interface ProjectContext {
   readonly auth: AuthStore;
   readonly stats: StatsStore;
   readonly cleanup: CleanupStore;
+  readonly notifications: NotificationStore;
 }
 
 /** `?days=` bounded to something a chart can hold and the table can still serve. */
@@ -94,8 +97,97 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
   if (section === "events" && target === undefined) return cleanupEvents(ctx, name);
   if (section === "members" && target === undefined) return listMembers(ctx, name);
   if (section === "members" && target !== undefined) return member(ctx, name, target);
+  if (section === "notifications" && target === undefined) return notificationPolicies(ctx, name);
+  if (section === "notifications" && target !== undefined) return removeNotification(ctx, name, target);
+  if (section === "deliveries" && target === undefined) return deliveries(ctx, name);
 
   throw notFound();
+}
+
+/**
+ * Rudimentary, and knowingly so. An address is only ever handed to the mail
+ * provider, which is the thing that actually knows whether it can be reached.
+ */
+function isEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(value) && value.length <= 254;
+}
+
+async function notificationPolicies(ctx: ProjectContext, name: string): Promise<Response> {
+  await requireProjectOwner(ctx, name);
+
+  if (ctx.request.method === "GET") {
+    return Response.json({ policies: await ctx.notifications.list(name) });
+  }
+  if (ctx.request.method !== "POST") throw notFound();
+  if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
+
+  const body = await readJson<{
+    name?: string;
+    targetType?: string;
+    target?: string;
+    secret?: string;
+    eventTypes?: string[];
+  }>(ctx.request);
+
+  if (typeof body.name !== "string" || body.name.trim() === "") throw badRequest("name is required");
+  if (body.targetType !== "webhook" && body.targetType !== "email") {
+    throw badRequest('targetType must be "webhook" or "email"');
+  }
+  if (typeof body.target !== "string" || body.target === "") throw badRequest("target is required");
+
+  if (body.targetType === "webhook" && !isAllowedWebhookUrl(body.target)) {
+    throw badRequest("target must be an https URL that does not resolve to a private address");
+  }
+  if (body.targetType === "email" && !isEmailAddress(body.target)) {
+    throw badRequest("target must be an email address");
+  }
+
+  if (!Array.isArray(body.eventTypes) || body.eventTypes.length === 0) {
+    throw badRequest(`eventTypes must list at least one of: ${EVENT_TYPES.join(", ")}`);
+  }
+  const eventTypes: EventType[] = [];
+  for (const type of body.eventTypes) {
+    if (typeof type !== "string" || !isEventType(type))
+      throw badRequest(`unknown event type "${String(type)}"`);
+    eventTypes.push(type);
+  }
+
+  // A webhook with no secret cannot be authenticated by its recipient, so one is
+  // minted rather than left absent. It is shown exactly once, here.
+  const secret =
+    body.targetType === "email"
+      ? null
+      : typeof body.secret === "string" && body.secret !== ""
+        ? body.secret
+        : crypto.randomUUID().replaceAll("-", "");
+
+  const policy = await ctx.notifications.create({
+    id: crypto.randomUUID(),
+    project: name,
+    name: body.name.trim(),
+    targetType: body.targetType,
+    target: body.target,
+    secret,
+    eventTypes,
+  });
+
+  return Response.json({ ...policy, secret }, { status: 201 });
+}
+
+async function removeNotification(ctx: ProjectContext, name: string, id: string): Promise<Response> {
+  if (ctx.request.method !== "DELETE") throw notFound();
+  await requireProjectOwner(ctx, name);
+  if (!(await ctx.notifications.remove(name, id))) throw notFound("no such notification policy");
+  return new Response(null, { status: 204 });
+}
+
+/** What was sent and what came back, so a silently broken endpoint can be found. */
+async function deliveries(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  await requireProjectOwner(ctx, name);
+
+  const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
+  return Response.json({ deliveries: await ctx.notifications.deliveries(name, limit) });
 }
 
 /**

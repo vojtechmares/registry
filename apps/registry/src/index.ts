@@ -9,6 +9,8 @@ import { EventCollector } from "./events.js";
 import { runDueCleanups } from "./lifecycle/cleanup.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
 import { runLifecycle } from "./lifecycle/policies.js";
+import { NOTIFY_TASK, handleNotifyTask, notify } from "./notifications/dispatch.js";
+import { dedupe, toNotificationEvent } from "./notifications/translate.js";
 import { ProjectPolicy } from "./policy.js";
 import { enforceAddressRateLimit, enforcePrincipalRateLimit } from "./rate-limit.js";
 import { handleApiRequest, handleCatalog } from "./routes/api.js";
@@ -19,6 +21,8 @@ import { ProjectStore } from "./storage/projects.js";
 import { SignatureIndex } from "./storage/signatures.js";
 import { StatsStore } from "./storage/stats.js";
 import { DurableObjectUploadStore } from "./storage/uploads.js";
+import { TaskQueue } from "./tasks/queue.js";
+import { sweepTasks, type TaskHandler } from "./tasks/runner.js";
 
 export { RateLimiterObject } from "./durable-objects/rate-limiter.js";
 export { UploadSessionObject } from "./durable-objects/upload-session.js";
@@ -30,16 +34,33 @@ function notFound(): Response {
 /** Must match `triggers.crons` in wrangler.jsonc. */
 const NIGHTLY_CRON = "17 3 * * *";
 
+/** Finished tasks are kept for a week, long enough to explain a failure. */
+const TASK_RETENTION_MS = 7 * 86_400_000;
+
+/** Every kind of background work the queue knows how to run. */
+const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
+  [NOTIFY_TASK]: handleNotifyTask,
+};
+
 async function nightlyMaintenance(env: Env): Promise<void> {
   const retired = await runLifecycle(env);
   const reclaimed = await collectGarbage(env);
   const pruned = await new StatsStore(env.DB).prune();
-  console.log("nightly maintenance complete", { retired, reclaimed, pruned });
+  const tasks = await new TaskQueue(env.DB).prune(TASK_RETENTION_MS);
+  console.log("nightly maintenance complete", { retired, reclaimed, pruned, tasks });
 }
 
+/**
+ * The frequent trigger. Runs the cleanup policies that have come due, then
+ * drains whatever background work is waiting - retried notifications, mostly,
+ * since a fresh one is delivered from the request that caused it.
+ */
 async function sweepSchedules(env: Env): Promise<void> {
   const cleanups = await runDueCleanups(env);
   if (cleanups.length > 0) console.log("cleanup policies run", cleanups);
+
+  const tasks = await sweepTasks(env, TASK_HANDLERS);
+  if (tasks.ran > 0) console.log("background tasks run", tasks);
 }
 
 export default {
@@ -116,17 +137,46 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     request,
     registryContext(env, principal, store, request, events),
   );
-  if (events.events.length > 0) ctx.waitUntil(recordEvents(env, events));
+  if (events.events.length > 0) ctx.waitUntil(recordEvents(env, ctx, events, principal));
 
   return response ?? notFound();
 }
 
-async function recordEvents(env: Env, events: EventCollector): Promise<void> {
+/**
+ * Counts what happened, and tells whoever asked to be told.
+ *
+ * Both after the response has gone out, and both swallowing their own failures:
+ * a registry that cannot count, or whose webhook endpoint is down, must still
+ * be a registry that serves.
+ */
+async function recordEvents(
+  env: Env,
+  ctx: ExecutionContext,
+  events: EventCollector,
+  principal: Principal,
+): Promise<void> {
   try {
     await new StatsStore(env.DB).record(events.events);
   } catch (error) {
-    // Losing a counter is not worth an unhandled rejection in the isolate.
     console.error("failed to record usage", error);
+  }
+
+  const actor = { username: principal.kind === "anonymous" ? "anonymous" : principal.identity.username };
+  const notifications = dedupe(
+    events.events.flatMap((event) => {
+      const translated = toNotificationEvent(event, actor);
+      return translated === null ? [] : [translated];
+    }),
+  );
+
+  for (const event of notifications) {
+    try {
+      const queued = await notify(env, event);
+      // Deliver now rather than waiting up to fifteen minutes for the sweep.
+      if (queued > 0) ctx.waitUntil(sweepTasks(env, TASK_HANDLERS));
+    } catch (error) {
+      console.error("failed to queue notifications", error);
+    }
   }
 }
 

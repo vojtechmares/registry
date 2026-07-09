@@ -16,6 +16,7 @@
   "dependencies": {
     "@registry/api-contract": "workspace:*",
     "@registry/cron": "workspace:*",
+    "@registry/notifications": "workspace:*",
     "@registry/oci": "workspace:*",
     "@registry/projects": "workspace:*",
     "@registry/registry-core": "workspace:*",

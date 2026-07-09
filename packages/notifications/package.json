@@ -1,0 +1,18 @@
+{
+  "name": "@registry/notifications",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Event payloads, HMAC-signed webhooks, and email rendering",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

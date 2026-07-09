@@ -15,6 +15,7 @@ import {
 import { AuthStore } from "../auth/store.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
+import { NotificationStore } from "../notifications/store.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
 import { StatsStore } from "../storage/stats.js";
@@ -80,6 +81,7 @@ export async function handleApiRequest(
   const projects = new ProjectStore(env.DB);
   const usage = new StatsStore(env.DB);
   const cleanup = new CleanupStore(env.DB);
+  const notifications = new NotificationStore(env.DB);
   const path = url.pathname.slice(PREFIX.length);
   const secure = url.protocol === "https:";
 
@@ -95,6 +97,7 @@ export async function handleApiRequest(
       projects,
       stats: usage,
       cleanup,
+      notifications,
       config,
       secure,
       env,
@@ -120,6 +123,7 @@ interface Context {
   projects: ProjectStore;
   stats: StatsStore;
   cleanup: CleanupStore;
+  notifications: NotificationStore;
   config: RegistryConfig;
   secure: boolean;
   env: Env;

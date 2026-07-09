@@ -33,6 +33,16 @@ export interface Env {
 
   /** Untagged manifests older than this are swept by the lifecycle job. */
   readonly UNTAGGED_MANIFEST_TTL_DAYS?: string;
+
+  /**
+   * Email notifications, sent through any provider that accepts
+   * `{from, to, subject, text}` as JSON with a bearer token. All three or none:
+   * a half-configured provider is a permanent delivery failure, and says so.
+   */
+  readonly EMAIL_PROVIDER_URL?: string;
+  /** Secret. */
+  readonly EMAIL_API_KEY?: string;
+  readonly EMAIL_FROM?: string;
 }
 
 export function flag(value: string | undefined, fallback: boolean): boolean {
