@@ -11,6 +11,7 @@ import {
 } from "@registry/oci";
 import type { Manifest } from "@registry/oci";
 import { errorResponse, readBodyLimited } from "../http.js";
+import { eventsOf, policyOf } from "../ports.js";
 import type { ManifestRecord, RegistryContext } from "../ports.js";
 import { digestHex, parseReference, requireRepositoryName } from "../validate.js";
 
@@ -51,6 +52,8 @@ async function pullManifest(
   const record = await ctx.metadata.getManifest(name, digest);
   if (record === null) throw manifestUnknown(reference);
 
+  await policyOf(ctx).beforeManifestPull(name, record);
+
   const headers = new Headers({
     "Content-Type": record.mediaType,
     "Content-Length": String(record.size),
@@ -62,6 +65,8 @@ async function pullManifest(
 
   const body = await ctx.content.get(ctx.content.manifestKey(digest));
   if (body === null) throw manifestUnknown(reference);
+
+  eventsOf(ctx).manifestPulled(name, record, reference);
   return new Response(body.body, { status: 200, headers });
 }
 
@@ -88,9 +93,6 @@ async function pushManifest(
   }
 
   await ensureReferencesExist(name, manifest, ctx);
-  await ctx.metadata.ensureRepository(name);
-
-  await ctx.content.put(ctx.content.manifestKey(digest), body, body.length, digestHex(digest));
 
   const artifactType = referrerArtifactType(manifest);
   const record: ManifestRecord = {
@@ -102,8 +104,17 @@ async function pushManifest(
     annotations: manifest.annotations ?? null,
   };
 
+  // Ahead of every write, so that a refusal leaves nothing behind: no manifest
+  // object in the bucket, no repository row for a project that never accepted it.
+  const tag = parsed.kind === "tag" ? parsed.tag : null;
+  await policyOf(ctx).beforeManifestPush(name, record, tag);
+
+  await ctx.metadata.ensureRepository(name);
+  await ctx.content.put(ctx.content.manifestKey(digest), body, body.length, digestHex(digest));
+
   await ctx.metadata.putManifest(name, record, referencedContent(manifest));
-  if (parsed.kind === "tag") await ctx.metadata.tagManifest(name, parsed.tag, digest);
+  if (tag !== null) await ctx.metadata.tagManifest(name, tag, digest);
+  eventsOf(ctx).manifestPushed(name, record, tag);
 
   const headers = new Headers({
     Location: `/v2/${name}/manifests/${digest}`,
@@ -151,5 +162,9 @@ async function deleteManifest(name: string, reference: string, ctx: RegistryCont
       : await ctx.metadata.deleteTag(name, parsed.tag);
 
   if (!removed) throw manifestUnknown(reference);
+
+  if (parsed.kind === "digest") eventsOf(ctx).manifestDeleted(name, parsed.digest);
+  else eventsOf(ctx).tagDeleted(name, parsed.tag);
+
   return new Response(null, { status: 202, headers: { "Content-Length": "0" } });
 }

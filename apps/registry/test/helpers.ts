@@ -1,4 +1,5 @@
 import { SELF, env } from "cloudflare:test";
+import { type Role, projectOf } from "@registry/projects";
 import { hashPassword } from "../src/auth/password.js";
 
 /** The origin is arbitrary; only the path and query reach the router. */
@@ -64,4 +65,68 @@ export async function seedUser(options: SeedUserOptions): Promise<void> {
 export async function errorCode(response: Response): Promise<string> {
   const body = (await response.json()) as { errors: Array<{ code: string }> };
   return body.errors[0]!.code;
+}
+
+export interface SeedProjectOptions {
+  readonly name: string;
+  readonly visibility?: "public" | "private";
+  readonly quotaBytes?: number | null;
+  readonly requireSignaturePush?: boolean;
+  readonly requireSignaturePull?: boolean;
+}
+
+export async function seedProject(options: SeedProjectOptions): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO projects
+       (name, visibility, quota_bytes, used_bytes, require_signature_push, require_signature_pull,
+        created_at, updated_at)
+     VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+     ON CONFLICT (name) DO UPDATE SET
+       visibility = excluded.visibility,
+       quota_bytes = excluded.quota_bytes,
+       require_signature_push = excluded.require_signature_push,
+       require_signature_pull = excluded.require_signature_pull`,
+  )
+    .bind(
+      options.name,
+      options.visibility ?? "private",
+      options.quotaBytes ?? null,
+      options.requireSignaturePush === true ? 1 : 0,
+      options.requireSignaturePull === true ? 1 : 0,
+      now,
+      now,
+    )
+    .run();
+}
+
+/** Creates the repository and, implicitly, the project holding it. */
+export async function seedRepository(name: string, project?: SeedProjectOptions): Promise<void> {
+  const owner = projectOf(name);
+  await seedProject({ name: owner, ...project });
+
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO repositories (name, project, created_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (name) DO NOTHING`,
+  )
+    .bind(name, owner, now, now)
+    .run();
+}
+
+export async function seedMember(project: string, userId: string, role: Role): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO project_members (project, user_id, role, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (project, user_id) DO UPDATE SET role = excluded.role`,
+  )
+    .bind(project, userId, role, Date.now())
+    .run();
+}
+
+/** The bytes a project is charged for, as the registry itself accounts them. */
+export async function projectUsage(name: string): Promise<number> {
+  const row = await env.DB.prepare("SELECT used_bytes FROM projects WHERE name = ?")
+    .bind(name)
+    .first<{ used_bytes: number }>();
+  return row?.used_bytes ?? 0;
 }

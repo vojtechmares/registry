@@ -1,15 +1,10 @@
 import { OciError, isValidDigest, isValidRepositoryName } from "@registry/oci";
+import { isValidProjectName, projectOf } from "@registry/projects";
 import type { Action, Authorize } from "@registry/registry-core";
 import { createAuthorize } from "../auth/authorize.js";
 import type { RegistryConfig } from "../auth/config.js";
 import { formatAccessToken, generateTokenSecret, hashPassword, hashTokenSecret } from "../auth/password.js";
-import {
-  ANONYMOUS,
-  authenticateCredentials,
-  resolvePrincipal,
-  type Identity,
-  type Principal,
-} from "../auth/principal.js";
+import { ANONYMOUS, authenticateCredentials, resolvePrincipal, type Principal } from "../auth/principal.js";
 import { isAction, type Scope } from "../auth/scopes.js";
 import {
   clearSessionCookie,
@@ -20,25 +15,25 @@ import {
 import { AuthStore } from "../auth/store.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
-import type { CreatedAccessToken, LifecyclePolicy, Visibility } from "@registry/api-contract";
+import { ProjectStore } from "../storage/projects.js";
+import { handleProjects, viewerOf } from "./projects.js";
+import {
+  ApiError,
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  optionalPositive,
+  readJson,
+  requireAdmin,
+  requireIdentity,
+  requireJsonBody,
+  requireUser,
+} from "./support.js";
+import type { CreatedAccessToken, LifecyclePolicy } from "@registry/api-contract";
 
 const PREFIX = "/api/v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const badRequest = (message: string) => new ApiError(400, "invalid_request", message);
-const notFound = (message = "not found") => new ApiError(404, "not_found", message);
-const forbidden = (message = "forbidden") => new ApiError(403, "forbidden", message);
-const unauthenticated = (message = "authentication required") => new ApiError(401, "unauthorized", message);
 
 /**
  * Resolves the caller for the management API.
@@ -70,56 +65,6 @@ async function resolveApiPrincipal(
   return { kind: "user", identity };
 }
 
-function requireIdentity(principal: Principal): Identity {
-  if (principal.kind === "anonymous") throw unauthenticated();
-  return principal.identity;
-}
-
-/**
- * The control plane - accounts, tokens, registry stats - is reachable only by a
- * signed-in human, never by a machine token.
- *
- * A machine token is a data-plane credential: it exists to pull and push within
- * a declared set of scopes. Were the control-plane guards to check only
- * `isAdmin`, a narrow token minted by an administrator could create a fresh
- * admin user and escalate straight past its own confinement. Repository
- * management (visibility, deletion, policy) stays open to tokens because those
- * routes re-check the token's scopes through `authorize`; the identity-gated
- * routes below do not, so they must exclude tokens outright.
- */
-function requireUser(principal: Principal): Identity {
-  const identity = requireIdentity(principal);
-  if (principal.kind === "token") throw forbidden("access tokens may not manage accounts or other tokens");
-  return identity;
-}
-
-function requireAdmin(principal: Principal): Identity {
-  const identity = requireUser(principal);
-  if (!identity.isAdmin) throw forbidden("administrator privileges are required");
-  return identity;
-}
-
-/**
- * A cross-site form post cannot set this header, and `SameSite=Strict` already
- * stops the cookie from riding along. Requiring it makes state-changing calls
- * unreachable from another origin.
- */
-function requireJsonBody(request: Request): void {
-  const contentType = request.headers.get("Content-Type") ?? "";
-  if (!contentType.startsWith("application/json")) {
-    throw badRequest("mutations must send a JSON body");
-  }
-}
-
-async function readJson<T>(request: Request): Promise<T> {
-  requireJsonBody(request);
-  try {
-    return (await request.json()) as T;
-  } catch {
-    throw badRequest("body is not valid JSON");
-  }
-}
-
 export async function handleApiRequest(
   request: Request,
   env: Env,
@@ -130,12 +75,13 @@ export async function handleApiRequest(
 
   const auth = new AuthStore(env.DB);
   const admin = new AdminStore(env.DB);
+  const projects = new ProjectStore(env.DB);
   const path = url.pathname.slice(PREFIX.length);
   const secure = url.protocol === "https:";
 
   try {
     const principal = await resolveApiPrincipal(request, auth, config);
-    return await dispatch({ request, url, path, principal, auth, admin, config, secure, env });
+    return await dispatch({ request, url, path, principal, auth, admin, projects, config, secure, env });
   } catch (error) {
     if (error instanceof ApiError) {
       return Response.json({ error: error.code, message: error.message }, { status: error.status });
@@ -154,6 +100,7 @@ interface Context {
   principal: Principal;
   auth: AuthStore;
   admin: AdminStore;
+  projects: ProjectStore;
   config: RegistryConfig;
   secure: boolean;
   env: Env;
@@ -171,6 +118,9 @@ async function dispatch(ctx: Context): Promise<Response> {
   if (path.startsWith("/tokens/")) return revokeToken(ctx, path.slice("/tokens/".length));
   if (path === "/users") return request.method === "GET" ? listUsers(ctx) : createUser(ctx);
   if (path.startsWith("/users/")) return deleteUser(ctx, path.slice("/users/".length));
+
+  const project = await handleProjects(ctx, path);
+  if (project !== null) return project;
 
   // Repository names contain slashes, so the fixed suffix decides the route.
   if (path.startsWith("/repositories/")) {
@@ -236,14 +186,16 @@ async function stats(ctx: Context): Promise<Response> {
 
 async function listRepositories(ctx: Context): Promise<Response> {
   const search = ctx.url.searchParams.get("search");
+  const project = ctx.url.searchParams.get("project");
   const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
 
-  const visibleTo =
-    ctx.principal.kind === "anonymous"
-      ? null
-      : { username: ctx.principal.identity.username, isAdmin: ctx.principal.identity.isAdmin };
-
-  return Response.json({ repositories: await ctx.admin.listRepositories({ search, limit, visibleTo }) });
+  const repositories = await ctx.admin.listRepositories({
+    search,
+    project,
+    limit,
+    visibleTo: viewerOf(ctx.principal),
+  });
+  return Response.json({ repositories });
 }
 
 function authorizeFor(ctx: Context) {
@@ -266,22 +218,14 @@ async function repository(ctx: Context, rawName: string): Promise<Response> {
     return Response.json(detail);
   }
 
-  if (ctx.request.method === "PATCH") {
-    await authorize(name, "delete");
-    const body = await readJson<{ visibility?: Visibility }>(ctx.request);
-    if (body.visibility !== "public" && body.visibility !== "private") {
-      throw badRequest('visibility must be "public" or "private"');
-    }
-    if (!(await ctx.admin.setVisibility(name, body.visibility))) throw notFound();
-    return Response.json({ name, visibility: body.visibility });
-  }
-
   if (ctx.request.method === "DELETE") {
     await authorize(name, "delete");
     if (!(await ctx.admin.deleteRepository(name))) throw notFound();
     return new Response(null, { status: 204 });
   }
 
+  // Visibility used to live here. It belongs to the project now:
+  // `PATCH /api/v1/projects/<project>`.
   throw notFound();
 }
 
@@ -337,14 +281,6 @@ async function repositoryPolicy(ctx: Context, rawName: string): Promise<Response
   throw notFound();
 }
 
-function optionalPositive(value: unknown, field: string): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw badRequest(`${field} must be a positive integer or null`);
-  }
-  return value;
-}
-
 async function listTokens(ctx: Context): Promise<Response> {
   const identity = requireUser(ctx.principal);
   return Response.json({ tokens: await ctx.admin.listTokens(identity.id) });
@@ -358,12 +294,21 @@ async function createToken(ctx: Context): Promise<Response> {
   const body = await readJson<{
     name?: string;
     scopes?: Array<{ repository?: string; actions?: string[] }>;
+    project?: string;
     expiresInDays?: number;
   }>(ctx.request);
 
   if (typeof body.name !== "string" || body.name.trim() === "") throw badRequest("name is required");
   if (!Array.isArray(body.scopes) || body.scopes.length === 0)
     throw badRequest("at least one scope is required");
+
+  let project: string | null = null;
+  if (body.project !== undefined && body.project !== "") {
+    if (!isValidProjectName(body.project)) throw badRequest(`"${body.project}" is not a valid project name`);
+    if (!(await ctx.projects.exists(body.project)))
+      throw notFound(`project "${body.project}" does not exist`);
+    project = body.project;
+  }
 
   const authorize = authorizeFor(ctx);
   const scopes: Scope[] = [];
@@ -377,12 +322,26 @@ async function createToken(ctx: Context): Promise<Response> {
     if (actions.length !== scope.actions.length)
       throw badRequest("scope.actions may only contain pull, push, delete");
 
-    // A token may never grant what its creator does not already hold. Wildcards
-    // are checked against their literal prefix, which an administrator alone owns.
-    const probe = scope.repository.endsWith("/*") ? scope.repository.slice(0, -2) : scope.repository;
-    if (scope.repository === "*" && !identity.isAdmin)
-      throw forbidden("only administrators may scope a token to `*`");
-    if (scope.repository !== "*") {
+    // A token may never grant what its creator does not already hold.
+    //
+    // A wildcard is checked against the thing it stands for. Pinned to a
+    // project, `*` means "everywhere in this project", so the project name is
+    // the probe and any of its owners may mint one. Unpinned, it means the whole
+    // registry, which only an administrator can grant.
+    if (scope.repository === "*") {
+      if (project === null && !identity.isAdmin) {
+        throw forbidden("only administrators may scope a token to `*` without pinning it to a project");
+      }
+      if (project !== null) {
+        for (const action of actions) await assertAllowed(authorize, project, action);
+      }
+    } else {
+      // A named scope outside the pinned project could never authorize anything,
+      // and reads as a permission the token does not have. Refuse it outright.
+      if (project !== null && projectOf(scope.repository) !== project) {
+        throw badRequest(`scope "${scope.repository}" lies outside the "${project}" project`);
+      }
+      const probe = scope.repository.endsWith("/*") ? scope.repository.slice(0, -2) : scope.repository;
       for (const action of actions) await assertAllowed(authorize, probe, action);
     }
 
@@ -404,6 +363,7 @@ async function createToken(ctx: Context): Promise<Response> {
     userId: identity.id,
     secretHash: await hashTokenSecret(secret),
     scopes,
+    project,
     expiresAt,
   });
 
@@ -451,7 +411,7 @@ async function createUser(ctx: Context): Promise<Response> {
   }
 
   if ((await ctx.auth.findUserByUsername(body.username)) !== null) {
-    throw new ApiError(409, "conflict", `user "${body.username}" already exists`);
+    throw conflict(`user "${body.username}" already exists`);
   }
 
   const user = await ctx.admin.createUser({
@@ -494,11 +454,7 @@ export async function handleCatalog(
   const last = url.searchParams.get("last");
 
   const admin = new AdminStore(env.DB);
-  const viewer =
-    principal.kind === "anonymous"
-      ? null
-      : { username: principal.identity.username, isAdmin: principal.identity.isAdmin };
-  const page = await admin.catalog(limit, last, viewer);
+  const page = await admin.catalog(limit, last, viewerOf(principal));
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (page.hasMore && page.names.length > 0) {

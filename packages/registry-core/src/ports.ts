@@ -206,10 +206,68 @@ export const DEFAULT_CONFIG: RegistryConfig = {
   enableDeletes: true,
 };
 
+/**
+ * Rules the distribution API must obey but cannot itself know.
+ *
+ * Storage quotas, signature requirements - anything that depends on who owns a
+ * repository rather than on what the spec says - is decided here. Each hook
+ * throws an `OciError` to refuse, and returns to permit. The core calls them at
+ * the exact points where a refusal is still free: before bytes are charged to
+ * anyone, before a tag moves, before a manifest is handed out.
+ */
+export interface RegistryPolicy {
+  /** Before a blob is linked into a repository, whether uploaded or cross-mounted. */
+  beforeBlobLink(repository: string, blob: { digest: string; size: number }): Promise<void>;
+  /** Before a manifest is stored. `tag` is null when it is pushed by digest alone. */
+  beforeManifestPush(repository: string, record: ManifestRecord, tag: string | null): Promise<void>;
+  /** Before a manifest's bytes are served. */
+  beforeManifestPull(repository: string, record: ManifestRecord): Promise<void>;
+}
+
+/** A policy that refuses nothing. What a registry with no projects behind it does. */
+export const PERMISSIVE_POLICY: RegistryPolicy = {
+  async beforeBlobLink() {},
+  async beforeManifestPush() {},
+  async beforeManifestPull() {},
+};
+
+/**
+ * Told about what happened, never asked whether it may. Handlers must not await
+ * these: an adapter records statistics and fans out notifications, and neither
+ * belongs on the critical path of a `docker pull`.
+ */
+export interface RegistryEvents {
+  blobPushed(repository: string, blob: { digest: string; size: number }): void;
+  manifestPushed(repository: string, record: ManifestRecord, tag: string | null): void;
+  manifestPulled(repository: string, record: ManifestRecord, reference: string): void;
+  manifestDeleted(repository: string, digest: string): void;
+  tagDeleted(repository: string, tag: string): void;
+}
+
+export const NO_EVENTS: RegistryEvents = {
+  blobPushed() {},
+  manifestPushed() {},
+  manifestPulled() {},
+  manifestDeleted() {},
+  tagDeleted() {},
+};
+
 export interface RegistryContext {
   readonly metadata: MetadataStore;
   readonly content: ContentStore;
   readonly uploads: UploadStore;
   readonly config: RegistryConfig;
   readonly authorize: Authorize;
+  /** Defaults to `PERMISSIVE_POLICY`. */
+  readonly policy?: RegistryPolicy;
+  /** Defaults to `NO_EVENTS`. */
+  readonly events?: RegistryEvents;
+}
+
+export function policyOf(ctx: RegistryContext): RegistryPolicy {
+  return ctx.policy ?? PERMISSIVE_POLICY;
+}
+
+export function eventsOf(ctx: RegistryContext): RegistryEvents {
+  return ctx.events ?? NO_EVENTS;
 }

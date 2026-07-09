@@ -9,6 +9,7 @@ import type {
   UserSummary,
   Visibility,
 } from "@registry/api-contract";
+import { projectOf } from "@registry/projects";
 import { parseScopes, type Scope } from "../auth/scopes.js";
 
 /**
@@ -33,6 +34,34 @@ function json<T>(raw: string | null): T | null {
   }
 }
 
+export interface Viewer {
+  readonly id: string;
+  readonly username: string;
+  readonly isAdmin: boolean;
+}
+
+/**
+ * Who may see a repository, expressed once and joined through its project.
+ *
+ * An administrator sees everything. Anyone else sees the public projects, the
+ * projects they are a member of, and the project named after them. An anonymous
+ * caller sees only what is public. Returns null when no filter is needed.
+ *
+ * A fragment rather than a repeated clause, because `_catalog` and the
+ * dashboard's repository list must never drift apart: one of them disclosing a
+ * private repository name the other hides is a leak in whichever is wrong.
+ */
+function visibleProjects(viewer: Viewer | null, alias: string): { sql: string; bindings: unknown[] } | null {
+  if (viewer === null) return { sql: `${alias}.visibility = 'public'`, bindings: [] };
+  if (viewer.isAdmin) return null;
+  return {
+    sql: `(${alias}.visibility = 'public'
+           OR ${alias}.name = ?
+           OR EXISTS (SELECT 1 FROM project_members AS pm WHERE pm.project = ${alias}.name AND pm.user_id = ?))`,
+    bindings: [viewer.username, viewer.id],
+  };
+}
+
 /** Read and write paths for the dashboard, kept apart from the hot registry path. */
 export class AdminStore {
   constructor(private readonly db: D1Database) {}
@@ -48,6 +77,7 @@ export class AdminStore {
    */
   async stats(): Promise<RegistryStats> {
     const results = await this.db.batch<{ n: number; bytes?: number }>([
+      this.db.prepare("SELECT COUNT(*) AS n FROM projects"),
       this.db.prepare("SELECT COUNT(*) AS n FROM repositories"),
       this.db.prepare("SELECT COUNT(*) AS n FROM tags"),
       this.db.prepare("SELECT COUNT(*) AS n FROM manifests"),
@@ -62,27 +92,29 @@ export class AdminStore {
     ]);
 
     const count = (index: number): number => results[index]?.results[0]?.n ?? 0;
-    const blobRow = results[3]?.results[0];
+    const blobRow = results[4]?.results[0];
     const storageBytes = blobRow?.bytes ?? 0;
-    const referencedBytes = count(4);
+    const referencedBytes = count(5);
 
     return {
-      repositories: count(0),
-      tags: count(1),
-      manifests: count(2),
+      projects: count(0),
+      repositories: count(1),
+      tags: count(2),
+      manifests: count(3),
       blobs: blobRow?.n ?? 0,
       storageBytes,
       referencedBytes,
-      logicalBytes: count(5),
+      logicalBytes: count(6),
       reclaimableBytes: Math.max(0, storageBytes - referencedBytes),
     };
   }
 
-  /** Repositories the caller may see: everything for an admin, public plus owned otherwise. */
+  /** Repositories the caller may see, filtered through their projects. */
   async listRepositories(options: {
     search: string | null;
     limit: number;
-    visibleTo: { username: string; isAdmin: boolean } | null;
+    project: string | null;
+    visibleTo: Viewer | null;
   }): Promise<RepositorySummary[]> {
     const filters: string[] = [];
     const bindings: unknown[] = [];
@@ -92,11 +124,15 @@ export class AdminStore {
       bindings.push(`%${escapeLike(options.search)}%`);
     }
 
-    if (options.visibleTo === null) {
-      filters.push("r.visibility = 'public'");
-    } else if (!options.visibleTo.isAdmin) {
-      filters.push("(r.visibility = 'public' OR r.name = ? OR r.name LIKE ? ESCAPE '\\')");
-      bindings.push(options.visibleTo.username, `${escapeLike(options.visibleTo.username)}/%`);
+    if (options.project !== null) {
+      filters.push("r.project = ?");
+      bindings.push(options.project);
+    }
+
+    const visible = visibleProjects(options.visibleTo, "p");
+    if (visible !== null) {
+      filters.push(visible.sql);
+      bindings.push(...visible.bindings);
     }
 
     const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
@@ -105,13 +141,15 @@ export class AdminStore {
       .prepare(
         `SELECT
            r.name,
-           r.visibility,
+           r.project,
+           p.visibility,
            r.updated_at,
            (SELECT COUNT(*) FROM tags t WHERE t.repository = r.name) AS tags,
            (SELECT COUNT(*) FROM manifests m WHERE m.repository = r.name) AS manifests,
            (SELECT COALESCE(SUM(b.size), 0) FROM repository_blobs rb
               JOIN blobs b ON b.digest = rb.digest WHERE rb.repository = r.name) AS size_bytes
          FROM repositories AS r
+         JOIN projects AS p ON p.name = r.project
          ${where}
          ORDER BY r.name ASC
          LIMIT ?`,
@@ -119,6 +157,7 @@ export class AdminStore {
       .bind(...bindings, options.limit)
       .all<{
         name: string;
+        project: string;
         visibility: Visibility;
         updated_at: number;
         tags: number;
@@ -128,6 +167,7 @@ export class AdminStore {
 
     return rows.results.map((row) => ({
       name: row.name,
+      project: row.project,
       visibility: row.visibility,
       tags: row.tags,
       manifests: row.manifests,
@@ -138,9 +178,19 @@ export class AdminStore {
 
   async repository(name: string): Promise<RepositoryDetail | null> {
     const row = await this.db
-      .prepare("SELECT name, visibility, created_at, updated_at FROM repositories WHERE name = ?")
+      .prepare(
+        `SELECT r.name, r.project, p.visibility, r.created_at, r.updated_at
+         FROM repositories AS r JOIN projects AS p ON p.name = r.project
+         WHERE r.name = ?`,
+      )
       .bind(name)
-      .first<{ name: string; visibility: Visibility; created_at: number; updated_at: number }>();
+      .first<{
+        name: string;
+        project: string;
+        visibility: Visibility;
+        created_at: number;
+        updated_at: number;
+      }>();
     if (row === null) return null;
 
     const size = await this.db
@@ -153,6 +203,7 @@ export class AdminStore {
 
     return {
       name: row.name,
+      project: row.project,
       visibility: row.visibility,
       sizeBytes: size?.bytes ?? 0,
       createdAt: row.created_at,
@@ -254,19 +305,13 @@ export class AdminStore {
     };
   }
 
-  async setVisibility(repository: string, visibility: Visibility): Promise<boolean> {
-    const result = await this.db
-      .prepare("UPDATE repositories SET visibility = ?, updated_at = ? WHERE name = ?")
-      .bind(visibility, Date.now(), repository)
-      .run();
-    return (result.meta.changes ?? 0) > 0;
-  }
-
   /**
-   * Removes the repository's metadata and unlinks its content. The bytes stay
-   * until garbage collection confirms nothing else links them.
+   * Removes the repository's metadata and unlinks its content, then settles the
+   * project's usage against the links that survive. The bytes stay in the
+   * bucket until garbage collection confirms nothing else references them.
    */
   async deleteRepository(repository: string): Promise<boolean> {
+    const project = projectOf(repository);
     const results = await this.db.batch([
       this.db.prepare("DELETE FROM tags WHERE repository = ?").bind(repository),
       this.db.prepare("DELETE FROM manifest_blobs WHERE repository = ?").bind(repository),
@@ -275,6 +320,19 @@ export class AdminStore {
       this.db.prepare("DELETE FROM repository_blobs WHERE repository = ?").bind(repository),
       this.db.prepare("DELETE FROM lifecycle_policies WHERE repository = ?").bind(repository),
       this.db.prepare("DELETE FROM repositories WHERE name = ?").bind(repository),
+      // In the same transaction as the unlinks, so the total can never be read
+      // between the two and believed.
+      this.db
+        .prepare(
+          `UPDATE projects
+              SET used_bytes = COALESCE((
+                    SELECT SUM(b.size)
+                    FROM (SELECT DISTINCT digest FROM repository_blobs WHERE project = ?1) AS d
+                    JOIN blobs AS b ON b.digest = d.digest
+                  ), 0)
+            WHERE name = ?1`,
+        )
+        .bind(project),
     ]);
     return (results[6]?.meta.changes ?? 0) > 0;
   }
@@ -324,7 +382,7 @@ export class AdminStore {
   async listTokens(userId: string): Promise<AccessTokenSummary[]> {
     const rows = await this.db
       .prepare(
-        `SELECT id, name, scopes, expires_at, revoked, created_at, last_used_at
+        `SELECT id, name, scopes, project, expires_at, revoked, created_at, last_used_at
          FROM access_tokens WHERE user_id = ? ORDER BY created_at DESC`,
       )
       .bind(userId)
@@ -332,6 +390,7 @@ export class AdminStore {
         id: string;
         name: string;
         scopes: string;
+        project: string | null;
         expires_at: number | null;
         revoked: number;
         created_at: number;
@@ -342,6 +401,7 @@ export class AdminStore {
       id: row.id,
       name: row.name,
       scopes: parseScopes(row.scopes),
+      project: row.project,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       lastUsedAt: row.last_used_at,
@@ -355,13 +415,15 @@ export class AdminStore {
     userId: string;
     secretHash: string;
     scopes: readonly Scope[];
+    project: string | null;
     expiresAt: number | null;
   }): Promise<AccessTokenSummary> {
     const createdAt = Date.now();
     await this.db
       .prepare(
-        `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, expires_at, revoked, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+        `INSERT INTO access_tokens
+           (id, name, user_id, secret_hash, scopes, project, expires_at, revoked, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       )
       .bind(
         input.id,
@@ -369,6 +431,7 @@ export class AdminStore {
         input.userId,
         input.secretHash,
         JSON.stringify(input.scopes),
+        input.project,
         input.expiresAt,
         createdAt,
       )
@@ -378,6 +441,7 @@ export class AdminStore {
       id: input.id,
       name: input.name,
       scopes: input.scopes,
+      project: input.project,
       expiresAt: input.expiresAt,
       createdAt,
       lastUsedAt: null,
@@ -469,35 +533,37 @@ export class AdminStore {
   /**
    * Repository names for `GET /v2/_catalog`.
    *
-   * A caller only ever sees what they could pull: everything for an
-   * administrator, otherwise the public repositories plus the ones they own.
-   * Listing a private name is itself a disclosure, so the filter belongs in the
-   * query rather than in the caller.
+   * A caller only ever sees what they could pull. Listing a private name is
+   * itself a disclosure, so the filter belongs in the query rather than in the
+   * caller, and it is the same filter the dashboard's listing uses.
    */
   async catalog(
     limit: number,
     last: string | null,
-    viewer: { username: string; isAdmin: boolean } | null,
+    viewer: Viewer | null,
   ): Promise<{ names: string[]; hasMore: boolean }> {
     const conditions: string[] = [];
     const bindings: unknown[] = [];
 
     if (last !== null) {
-      conditions.push("name > ?");
+      conditions.push("r.name > ?");
       bindings.push(last);
     }
 
-    if (viewer === null) {
-      conditions.push("visibility = 'public'");
-    } else if (!viewer.isAdmin) {
-      conditions.push("(visibility = 'public' OR name = ? OR name LIKE ? ESCAPE '\\')");
-      bindings.push(viewer.username, `${escapeLike(viewer.username)}/%`);
+    const visible = visibleProjects(viewer, "p");
+    if (visible !== null) {
+      conditions.push(visible.sql);
+      bindings.push(...visible.bindings);
     }
 
     const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
 
     const rows = await this.db
-      .prepare(`SELECT name FROM repositories ${where} ORDER BY name ASC LIMIT ?`)
+      .prepare(
+        `SELECT r.name FROM repositories AS r
+         JOIN projects AS p ON p.name = r.project
+         ${where} ORDER BY r.name ASC LIMIT ?`,
+      )
       .bind(...bindings, limit + 1)
       .all<{ name: string }>();
 

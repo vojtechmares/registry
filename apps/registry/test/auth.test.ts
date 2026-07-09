@@ -8,7 +8,7 @@ import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { formatAccessToken, hashTokenSecret } from "../src/auth/password.js";
 import type { Scope } from "../src/auth/scopes.js";
-import { basic, call, errorCode, seedUser } from "./helpers.js";
+import { basic, call, errorCode, seedRepository, seedUser } from "./helpers.js";
 
 const USER = "alice";
 const PASSWORD = "alice-password-1234";
@@ -48,12 +48,9 @@ async function seedToken(options: {
 beforeAll(async () => {
   await seedUser({ id: "alice-id", username: USER, password: PASSWORD });
 
+  await seedRepository(REPO);
+
   const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO repositories (name, visibility, created_at, updated_at) VALUES (?, 'private', ?, ?)",
-  )
-    .bind(REPO, now, now)
-    .run();
   await env.DB.prepare(
     "INSERT INTO tags (repository, name, manifest_digest, created_at, updated_at) VALUES (?, 'v1', ?, ?, ?)",
   )

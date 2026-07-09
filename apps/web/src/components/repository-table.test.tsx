@@ -9,6 +9,7 @@ const now = Date.now();
 const repositories: RepositorySummary[] = [
   {
     name: "myorg/app",
+    project: "myorg",
     visibility: "public",
     tags: 3,
     manifests: 4,
@@ -17,6 +18,7 @@ const repositories: RepositorySummary[] = [
   },
   {
     name: "myorg/secret",
+    project: "myorg",
     visibility: "private",
     tags: 0,
     manifests: 0,

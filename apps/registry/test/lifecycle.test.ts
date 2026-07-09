@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { collectGarbage } from "../src/lifecycle/garbage-collector.js";
 import { runLifecycle } from "../src/lifecycle/policies.js";
 import { blobKey } from "../src/keys.js";
+import { seedRepository } from "./helpers.js";
 import type { Env } from "../src/env.js";
 import { deterministic } from "./helpers.js";
 
@@ -110,11 +111,7 @@ describe("lifecycle retirement of untagged manifests", () => {
     // The registry-wide TTL only bites once configured above zero.
     const lifecycleEnv: Env = { ...env, UNTAGGED_MANIFEST_TTL_DAYS: "7" };
 
-    await env.DB.prepare(
-      "INSERT INTO repositories (name, visibility, created_at, updated_at) VALUES (?, 'private', ?, ?)",
-    )
-      .bind(REPO, now, now)
-      .run();
+    await seedRepository(REPO);
 
     const image = digest("1");
     const index = digest("2");

@@ -14,9 +14,10 @@
     "db:migrate:remote": "wrangler d1 migrations apply registry --remote"
   },
   "dependencies": {
+    "@registry/api-contract": "workspace:*",
     "@registry/oci": "workspace:*",
-    "@registry/registry-core": "workspace:*",
-    "@registry/api-contract": "workspace:*"
+    "@registry/projects": "workspace:*",
+    "@registry/registry-core": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.9.0",

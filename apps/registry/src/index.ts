@@ -7,11 +7,13 @@ import { AuthStore } from "./auth/store.js";
 import { readCoreConfig, type Env } from "./env.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
 import { runLifecycle } from "./lifecycle/policies.js";
+import { ProjectPolicy } from "./policy.js";
 import { enforceAddressRateLimit, enforcePrincipalRateLimit } from "./rate-limit.js";
 import { handleApiRequest, handleCatalog } from "./routes/api.js";
 import { handleToken } from "./routes/token.js";
 import { R2ContentStore } from "./storage/content.js";
 import { D1MetadataStore } from "./storage/metadata.js";
+import { ProjectStore } from "./storage/projects.js";
 import { DurableObjectUploadStore } from "./storage/uploads.js";
 
 export { RateLimiterObject } from "./durable-objects/rate-limiter.js";
@@ -116,5 +118,6 @@ function registryContext(
     uploads: new DurableObjectUploadStore(env.UPLOAD_SESSION),
     config: readCoreConfig(env),
     authorize: createAuthorize({ principal, store, config: readConfig(env, request) }),
+    policy: new ProjectPolicy(new ProjectStore(env.DB)),
   };
 }

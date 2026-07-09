@@ -1,16 +1,12 @@
-import type { Action } from "@registry/registry-core";
+import { type Action, isAction } from "@registry/projects";
+import type { Scope } from "@registry/projects";
 
-export const ACTIONS: readonly Action[] = ["pull", "push", "delete"];
-
-export interface Scope {
-  /** A repository name, or a prefix ending in `/*`, or `*` for everything. */
-  readonly repository: string;
-  readonly actions: readonly Action[];
-}
-
-export function isAction(value: string): value is Action {
-  return (ACTIONS as readonly string[]).includes(value);
-}
+// The scope model itself lives with the project model, because how far a token
+// reaches is a project question. What stays here is the wire format: how a
+// Docker client asks for a scope, how the registry stores one, and how it
+// echoes one back in a token's claims.
+export { ACTIONS, isAction, scopeMatchesRepository, scopesAllow } from "@registry/projects";
+export type { Scope } from "@registry/projects";
 
 /**
  * Parses a Docker token scope: `repository:<name>:<action>[,<action>]`.
@@ -39,20 +35,7 @@ export function parseScopeParameter(raw: string): Scope[] {
   return scopes;
 }
 
-/** True when `scope` covers `repository`, honouring a trailing `/*` and bare `*`. */
-export function scopeMatchesRepository(scope: Scope, repository: string): boolean {
-  if (scope.repository === "*") return true;
-  if (scope.repository.endsWith("/*")) {
-    const prefix = scope.repository.slice(0, -1);
-    return repository.startsWith(prefix);
-  }
-  return scope.repository === repository;
-}
-
-export function scopesAllow(scopes: readonly Scope[], repository: string, action: Action): boolean {
-  return scopes.some((scope) => scopeMatchesRepository(scope, repository) && scope.actions.includes(action));
-}
-
+/** Reads the `scopes` column, which holds the JSON the token was created with. */
 export function parseScopes(raw: string): Scope[] {
   try {
     const parsed: unknown = JSON.parse(raw);

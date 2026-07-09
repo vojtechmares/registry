@@ -8,7 +8,7 @@ import {
   sizeInvalid,
 } from "@registry/oci";
 import { emptyStream, errorResponse, parseContentRange, uploadRange } from "../http.js";
-import { ContentIntegrityError } from "../ports.js";
+import { ContentIntegrityError, eventsOf, policyOf } from "../ports.js";
 import type { BlobRecord, ChunkOptions, RegistryContext } from "../ports.js";
 import { digestHex, requireRepositoryName } from "../validate.js";
 
@@ -69,6 +69,10 @@ async function crossMount(
 ): Promise<Response> {
   const source = isValidDigest(mount) ? await findMountSource(name, mount, from, ctx) : null;
   if (source === null) return beginSession(name, ctx);
+
+  // A mount transfers no bytes, but it does make a second project responsible
+  // for them. It is a write, and it is charged and vetted like any other.
+  await policyOf(ctx).beforeBlobLink(name, { digest: mount, size: source.size });
 
   // The blob was there a moment ago. If it has since been collected, ask the
   // client to upload it rather than hand back a link to nothing.
@@ -142,6 +146,8 @@ async function monolithicPost(
 
   const size = contentLength(request);
   if (size === null) throw sizeInvalid("Content-Length is required for a monolithic upload");
+
+  await policyOf(ctx).beforeBlobLink(name, { digest, size });
 
   const key = ctx.content.blobKey(digest);
   await putVerified(ctx, key, request.body ?? emptyStream(), size, digest);
@@ -223,6 +229,10 @@ async function completeUpload(
   if (!isValidDigest(digest)) throw digestInvalid(`"${digest}" is not a valid digest`);
 
   const record = await ctx.uploads.complete(name, id, digest, request.body, chunkOptions(request));
+  // The size is only known once the last chunk has landed, so the quota is
+  // checked here rather than when the session opened. Content that a full
+  // project refuses is left unlinked, and garbage collection reclaims it.
+  await policyOf(ctx).beforeBlobLink(name, { digest, size: record.size });
   await registerAndLink(ctx, name, record);
 
   return created(name, digest);
@@ -240,6 +250,7 @@ async function registerAndLink(ctx: RegistryContext, name: string, record: BlobR
   if (stored.storageKey !== record.storageKey) {
     await ctx.content.delete(record.storageKey);
   }
+  eventsOf(ctx).blobPushed(name, { digest: record.digest, size: record.size });
 }
 
 async function putVerified(

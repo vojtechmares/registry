@@ -1,10 +1,10 @@
 import { OciError } from "@registry/oci";
-import type { Action } from "@registry/registry-core";
-import { challenge } from "../auth/authorize.js";
+import { type Action, decideAccess } from "@registry/projects";
+import { accessPrincipal, challenge } from "../auth/authorize.js";
 import type { RegistryConfig } from "../auth/config.js";
 import { signJwt, type RegistryClaims } from "../auth/jwt.js";
 import { authenticateCredentials, type Principal } from "../auth/principal.js";
-import { parseScopeParameter, scopesAllow, toAccessClaim, type Scope } from "../auth/scopes.js";
+import { parseScopeParameter, toAccessClaim, type Scope } from "../auth/scopes.js";
 import type { AuthStore } from "../auth/store.js";
 
 /**
@@ -21,10 +21,10 @@ import type { AuthStore } from "../auth/store.js";
  * token that grants nothing.
  *
  * The issued JWT identifies the principal rather than freezing a scope set: the
- * registry re-evaluates permissions per request against the live grant table,
- * so revoking access takes effect within the token's short lifetime rather than
- * only at expiry. A machine token is the exception - its confinement is copied
- * into the JWT so exchanging it can never widen it.
+ * registry re-evaluates permissions per request against the live membership
+ * table, so revoking access takes effect within the token's short lifetime
+ * rather than only at expiry. A machine token is the exception - its
+ * confinement is copied into the JWT so exchanging it can never widen it.
  */
 export async function handleToken(
   request: Request,
@@ -89,35 +89,23 @@ async function issueFor(
   store: AuthStore,
   config: RegistryConfig,
 ): Promise<Response> {
-  if (principal.kind === "anonymous") {
-    if (!config.allowAnonymousPull) {
-      return new Response(
-        JSON.stringify({ errors: [{ code: "UNAUTHORIZED", message: "authentication required" }] }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json", "WWW-Authenticate": challenge(config) },
-        },
-      );
-    }
-    // A token that names no subject. It grants exactly what an unauthenticated
-    // request already gets, and exists only so clients that insist on the token
-    // flow can complete it.
-    return issue(
-      config,
-      { id: "anonymous", username: "", isAdmin: false },
-      await publicSubset(store, requested),
-      true,
+  if (principal.kind === "anonymous" && !config.allowAnonymousPull) {
+    return new Response(
+      JSON.stringify({ errors: [{ code: "UNAUTHORIZED", message: "authentication required" }] }),
+      {
+        status: 401,
+        headers: { "Content-Type": "application/json", "WWW-Authenticate": challenge(config) },
+      },
     );
   }
 
-  const granted: Scope[] = [];
-  for (const scope of requested) {
-    const actions: Action[] = [];
-    for (const action of scope.actions) {
-      if (principal.kind === "token" && !scopesAllow(principal.scopes, scope.repository, action)) continue;
-      if (await permits(store, principal, scope.repository, action)) actions.push(action);
-    }
-    if (actions.length > 0) granted.push({ repository: scope.repository, actions });
+  const granted = await grant(principal, requested, store, config);
+
+  if (principal.kind === "anonymous") {
+    // A token that names no subject. It grants exactly what an unauthenticated
+    // request already gets, and exists only so clients that insist on the token
+    // flow can complete it.
+    return issue(config, { id: "anonymous", username: "", isAdmin: false }, granted, true);
   }
 
   return issue(
@@ -125,31 +113,43 @@ async function issueFor(
     principal.identity,
     granted,
     false,
-    principal.kind === "token" ? principal.scopes : undefined,
+    principal.kind === "token" ? { scopes: principal.scopes, project: principal.project } : undefined,
   );
 }
 
-async function permits(
-  store: AuthStore,
+/**
+ * The subset of the requested scopes the caller actually holds, decided by the
+ * very rules that gate the registry itself. Any second implementation of
+ * "may this caller push here" would eventually disagree with the first, and the
+ * disagreement would be a token minted for access the request path refuses -
+ * or, far worse, one it does not.
+ */
+async function grant(
   principal: Principal,
-  repository: string,
-  action: Action,
-): Promise<boolean> {
-  if (principal.kind === "anonymous") return false;
-  const { identity } = principal;
-  if (identity.isAdmin) return true;
-  if (repository === identity.username || repository.startsWith(`${identity.username}/`)) return true;
-  if ((await store.grantsFor(identity.id, repository)).includes(action)) return true;
-  return action === "pull" && (await store.repositoryVisibility(repository)) === "public";
-}
+  requested: readonly Scope[],
+  store: AuthStore,
+  config: RegistryConfig,
+): Promise<Scope[]> {
+  const caller = accessPrincipal(principal);
+  const userId = principal.kind === "anonymous" ? null : principal.identity.id;
 
-async function publicSubset(store: AuthStore, requested: readonly Scope[]): Promise<Scope[]> {
   const granted: Scope[] = [];
   for (const scope of requested) {
-    if (!scope.actions.includes("pull")) continue;
-    if ((await store.repositoryVisibility(scope.repository)) === "public") {
-      granted.push({ repository: scope.repository, actions: ["pull"] });
+    const project = await store.projectAccess(scope.repository, userId);
+    const actions: Action[] = [];
+
+    for (const action of scope.actions) {
+      const decision = decideAccess({
+        repository: scope.repository,
+        action,
+        principal: caller,
+        project,
+        allowAnonymousPull: config.allowAnonymousPull,
+      });
+      if (decision.kind === "allow") actions.push(action);
     }
+
+    if (actions.length > 0) granted.push({ repository: scope.repository, actions });
   }
   return granted;
 }
@@ -158,18 +158,24 @@ function scopeString(scopes: readonly Scope[]): string {
   return scopes.map((scope) => `repository:${scope.repository}:${scope.actions.join(",")}`).join(" ");
 }
 
+/** What a machine token's JWT must carry forward, so exchanging it cannot widen it. */
+interface Confinement {
+  readonly scopes: readonly Scope[];
+  readonly project: string | null;
+}
+
 async function issue(
   config: RegistryConfig,
   identity: { id: string; username: string; isAdmin: boolean },
   access: readonly Scope[],
   anonymous: boolean,
-  confinement?: readonly Scope[],
+  confinement?: Confinement,
 ): Promise<Response> {
   if (config.jwtSecret === "")
     throw new OciError("UNSUPPORTED", "token issuance is not configured", { status: 500 });
 
   const issuedAt = Math.floor(Date.now() / 1000);
-  const claims: RegistryClaims & { scopes?: readonly Scope[] } = {
+  const claims: RegistryClaims & Partial<Confinement> = {
     sub: anonymous ? "anonymous" : identity.id,
     name: identity.username,
     admin: !anonymous && identity.isAdmin,
@@ -180,7 +186,7 @@ async function issue(
     nbf: issuedAt,
     exp: issuedAt + config.tokenTtlSeconds,
     jti: crypto.randomUUID(),
-    ...(confinement === undefined ? {} : { scopes: confinement }),
+    ...(confinement === undefined ? {} : { scopes: confinement.scopes, project: confinement.project }),
   };
 
   const token = await signJwt(claims as RegistryClaims, config.jwtSecret);

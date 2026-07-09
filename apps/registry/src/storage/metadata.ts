@@ -5,6 +5,7 @@ import type {
   ReferrerRecord,
   TagPage,
 } from "@registry/registry-core";
+import { projectOf } from "@registry/projects";
 import { placeholders } from "./sql.js";
 
 interface BlobRow {
@@ -55,16 +56,34 @@ export class D1MetadataStore implements MetadataStore {
     return row !== null;
   }
 
+  /**
+   * Creates the repository, and the project it belongs to if that is new too.
+   *
+   * Only ever reached after `authorize` has admitted a push, and a push into a
+   * project that does not exist is admitted for exactly two callers: an
+   * administrator, and the user the project is named after. So the project is
+   * created here rather than in a separate call the caller could forget.
+   */
   async ensureRepository(repository: string): Promise<void> {
     const now = this.now();
-    await this.db
-      .prepare(
-        `INSERT INTO repositories (name, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at`,
-      )
-      .bind(repository, "private", now, now)
-      .run();
+    const project = projectOf(repository);
+
+    await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO projects (name, visibility, used_bytes, created_at, updated_at)
+           VALUES (?, 'private', 0, ?, ?)
+           ON CONFLICT (name) DO NOTHING`,
+        )
+        .bind(project, now, now),
+      this.db
+        .prepare(
+          `INSERT INTO repositories (name, project, created_at, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at`,
+        )
+        .bind(repository, project, now, now),
+    ]);
   }
 
   async getBlob(digest: string): Promise<BlobRecord | null> {
@@ -97,6 +116,50 @@ export class D1MetadataStore implements MetadataStore {
   }
 
   /**
+   * Charges a project for a blob, but only for the link that first brought it
+   * into the project.
+   *
+   * The statement runs immediately after the link's `INSERT ... ON CONFLICT DO
+   * NOTHING`, in the same transaction, and has to distinguish three outcomes it
+   * cannot see the return value of:
+   *
+   *   - the link is new and the project had no other, so charge it;
+   *   - the link is new but a sibling repository already links the blob, so the
+   *     project is already paying for those bytes;
+   *   - the link already existed, and this was a re-push of content the
+   *     repository holds.
+   *
+   * The count settles the second case. `link_token` settles the third: a fresh
+   * random token is written by an insert that actually inserts, and left alone
+   * by one the conflict clause swallowed, so matching it proves the row is ours.
+   */
+  private chargeProject(project: string, digest: string, token: string): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `UPDATE projects
+            SET used_bytes = used_bytes + (SELECT size FROM blobs WHERE digest = ?1),
+                updated_at = ?4
+          WHERE name = ?2
+            AND (SELECT COUNT(*) FROM repository_blobs WHERE project = ?2 AND digest = ?1) = 1
+            AND (SELECT link_token FROM repository_blobs WHERE project = ?2 AND digest = ?1) = ?3`,
+      )
+      .bind(digest, project, token, this.now());
+  }
+
+  /** The mirror image: the project stops paying once its last link to the blob is gone. */
+  private refundProject(project: string, digest: string): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `UPDATE projects
+            SET used_bytes = MAX(0, used_bytes - COALESCE((SELECT size FROM blobs WHERE digest = ?1), 0)),
+                updated_at = ?3
+          WHERE name = ?2
+            AND NOT EXISTS (SELECT 1 FROM repository_blobs WHERE project = ?2 AND digest = ?1)`,
+      )
+      .bind(digest, project, this.now());
+  }
+
+  /**
    * Deduplication point.
    *
    * `DO NOTHING` lets a concurrent upload of identical bytes win harmlessly, and
@@ -106,10 +169,14 @@ export class D1MetadataStore implements MetadataStore {
    * The insert and the link share one batch, which D1 runs as a transaction.
    * That is what makes the blob safe from garbage collection: the collector only
    * removes a row that has no link, and it can never observe this blob in the
-   * window between the two statements because there is no such window.
+   * window between the two statements because there is no such window. The
+   * quota update rides in the same transaction for the same reason.
    */
   async registerAndLinkBlob(repository: string, record: BlobRecord): Promise<BlobRecord> {
     const now = this.now();
+    const project = projectOf(repository);
+    const token = crypto.randomUUID();
+
     await this.db.batch([
       this.db
         .prepare(
@@ -120,11 +187,12 @@ export class D1MetadataStore implements MetadataStore {
         .bind(record.digest, record.size, record.storageKey, now),
       this.db
         .prepare(
-          `INSERT INTO repository_blobs (repository, digest, created_at)
-           VALUES (?, ?, ?)
+          `INSERT INTO repository_blobs (repository, project, digest, created_at, link_token)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT (repository, digest) DO NOTHING`,
         )
-        .bind(repository, record.digest, now),
+        .bind(repository, project, record.digest, now, token),
+      this.chargeProject(project, record.digest, token),
     ]);
 
     // Safe to read after the fact: the link now exists, so nothing may delete the row.
@@ -138,26 +206,34 @@ export class D1MetadataStore implements MetadataStore {
    * leave a repository pointing at content the registry no longer holds.
    */
   async linkBlob(repository: string, digest: string): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        `INSERT INTO repository_blobs (repository, digest, created_at)
-         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM blobs WHERE digest = ?)
-         ON CONFLICT (repository, digest) DO NOTHING`,
-      )
-      .bind(repository, digest, this.now(), digest)
-      .run();
+    const project = projectOf(repository);
+    const token = crypto.randomUUID();
+
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO repository_blobs (repository, project, digest, created_at, link_token)
+           SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM blobs WHERE digest = ?)
+           ON CONFLICT (repository, digest) DO NOTHING`,
+        )
+        .bind(repository, project, digest, this.now(), token, digest),
+      this.chargeProject(project, digest, token),
+    ]);
 
     // An existing link changes nothing, yet the blob is plainly linked.
-    if ((result.meta.changes ?? 0) > 0) return true;
+    if ((results[0]?.meta.changes ?? 0) > 0) return true;
     return (await this.getLinkedBlob(repository, digest)) !== null;
   }
 
   async unlinkBlob(repository: string, digest: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM repository_blobs WHERE repository = ? AND digest = ?")
-      .bind(repository, digest)
-      .run();
-    return (result.meta.changes ?? 0) > 0;
+    const project = projectOf(repository);
+    const results = await this.db.batch([
+      this.db
+        .prepare("DELETE FROM repository_blobs WHERE repository = ? AND digest = ?")
+        .bind(repository, digest),
+      this.refundProject(project, digest),
+    ]);
+    return (results[0]?.meta.changes ?? 0) > 0;
   }
 
   async missingLinkedBlobs(repository: string, digests: readonly string[]): Promise<string[]> {

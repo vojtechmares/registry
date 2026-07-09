@@ -1,0 +1,21 @@
+{
+  "name": "@registry/projects",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The project model: path segmentation, roles, quotas, and per-project rules",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@registry/oci": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -7,6 +7,7 @@
 
 export type Visibility = "public" | "private";
 export type Action = "pull" | "push" | "delete";
+export type Role = "guest" | "developer" | "maintainer" | "owner";
 
 export interface SessionUser {
   readonly id: string;
@@ -14,7 +15,48 @@ export interface SessionUser {
   readonly isAdmin: boolean;
 }
 
+/**
+ * A project: the first path segment of every repository inside it, and the
+ * only place policy lives.
+ */
+export interface ProjectSummary {
+  readonly name: string;
+  readonly visibility: Visibility;
+  readonly description: string | null;
+  /** Null is unlimited. Bytes, counted once per distinct blob in the project. */
+  readonly quotaBytes: number | null;
+  readonly usedBytes: number;
+  readonly requireSignaturePush: boolean;
+  readonly requireSignaturePull: boolean;
+  readonly repositories: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  /** The caller's role, or null when they are not a member. Absent for anonymous callers. */
+  readonly role: Role | null;
+}
+
+export interface ProjectMember {
+  readonly userId: string;
+  readonly username: string;
+  readonly role: Role;
+  readonly createdAt: number;
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  readonly members: readonly ProjectMember[];
+}
+
+/** Everything an owner may change about a project. Every field is optional. */
+export interface ProjectSettings {
+  readonly visibility?: Visibility;
+  readonly description?: string | null;
+  readonly quotaBytes?: number | null;
+  readonly requireSignaturePush?: boolean;
+  readonly requireSignaturePull?: boolean;
+}
+
 export interface RegistryStats {
+  readonly projects: number;
   readonly repositories: number;
   readonly tags: number;
   readonly manifests: number;
@@ -34,6 +76,8 @@ export interface RegistryStats {
 
 export interface RepositorySummary {
   readonly name: string;
+  readonly project: string;
+  /** Inherited from the project. Repositories have no visibility of their own. */
   readonly visibility: Visibility;
   readonly tags: number;
   readonly manifests: number;
@@ -70,6 +114,7 @@ export interface ManifestDetail {
 
 export interface RepositoryDetail {
   readonly name: string;
+  readonly project: string;
   readonly visibility: Visibility;
   readonly sizeBytes: number;
   readonly createdAt: number;
@@ -81,6 +126,8 @@ export interface AccessTokenSummary {
   readonly id: string;
   readonly name: string;
   readonly scopes: ReadonlyArray<{ repository: string; actions: readonly Action[] }>;
+  /** Non-null pins the token to one project, whatever its scopes say. */
+  readonly project: string | null;
   readonly expiresAt: number | null;
   readonly createdAt: number;
   readonly lastUsedAt: number | null;

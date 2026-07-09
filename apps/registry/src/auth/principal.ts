@@ -23,6 +23,8 @@ export type Principal =
       readonly kind: "token";
       readonly identity: Identity;
       readonly scopes: readonly Scope[];
+      /** Non-null pins the token to one project, whatever its scopes say. */
+      readonly project: string | null;
       readonly tokenId: string;
     };
 
@@ -130,6 +132,7 @@ async function authenticateAccessToken(id: string, secret: string, store: AuthSt
     tokenId: token.id,
     identity: { id: user.id, username: user.username, isAdmin: user.isAdmin },
     scopes: token.scopes,
+    project: token.project,
   };
 }
 
@@ -154,10 +157,19 @@ async function authenticateBearer(
 
   const identity: Identity = { id: claims.sub, username: claims.name, isAdmin: claims.admin };
 
-  // A JWT minted from a machine token inherits that token's confinement.
-  const scopes = (claims as { scopes?: Scope[] }).scopes;
-  if (scopes !== undefined) {
-    return { kind: "token", tokenId: claims.jti, identity, scopes };
+  // A JWT minted from a machine token inherits that token's confinement - both
+  // halves of it. Dropping the project here would let a token scoped to one
+  // project trade itself, at `/v2/token`, for a bearer token that reaches every
+  // project its owner can.
+  const confined = claims as { scopes?: Scope[]; project?: string | null };
+  if (confined.scopes !== undefined) {
+    return {
+      kind: "token",
+      tokenId: claims.jti,
+      identity,
+      scopes: confined.scopes,
+      project: confined.project ?? null,
+    };
   }
 
   // Session tokens for the bootstrap admin never touch the database.
