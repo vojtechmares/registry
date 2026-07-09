@@ -1,0 +1,28 @@
+{
+  "name": "@registry/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The OCI registry Worker: R2 blobs, D1 metadata, Durable Object upload sessions",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply registry --local",
+    "db:migrate:remote": "wrangler d1 migrations apply registry --remote"
+  },
+  "dependencies": {
+    "@registry/oci": "workspace:*",
+    "@registry/registry-core": "workspace:*",
+    "@registry/api-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.0",
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.9.3",
+    "vitest": "~3.2.4",
+    "wrangler": "^4.104.0"
+  }
+}

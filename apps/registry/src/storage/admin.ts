@@ -1,0 +1,495 @@
+import type {
+  AccessTokenSummary,
+  LifecyclePolicy,
+  ManifestDetail,
+  RegistryStats,
+  RepositoryDetail,
+  RepositorySummary,
+  TagSummary,
+  UserSummary,
+  Visibility,
+} from "@registry/api-contract";
+import { parseScopes, type Scope } from "../auth/scopes.js";
+
+function json<T>(raw: string | null): T | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Read and write paths for the dashboard, kept apart from the hot registry path. */
+export class AdminStore {
+  constructor(private readonly db: D1Database) {}
+
+  /**
+   * Three different totals, which are only equal in a registry that has never
+   * deleted anything and never stored the same layer twice.
+   *
+   * `storageBytes` is what R2 holds, garbage included. `referencedBytes` is the
+   * distinct content still linked. `logicalBytes` charges every repository for
+   * every blob it links, so the gap between it and `referencedBytes` is exactly
+   * what deduplication saved.
+   */
+  async stats(): Promise<RegistryStats> {
+    const results = await this.db.batch<{ n: number; bytes?: number }>([
+      this.db.prepare("SELECT COUNT(*) AS n FROM repositories"),
+      this.db.prepare("SELECT COUNT(*) AS n FROM tags"),
+      this.db.prepare("SELECT COUNT(*) AS n FROM manifests"),
+      this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM blobs"),
+      this.db.prepare(
+        `SELECT COALESCE(SUM(size), 0) AS n FROM blobs
+         WHERE EXISTS (SELECT 1 FROM repository_blobs AS rb WHERE rb.digest = blobs.digest)`,
+      ),
+      this.db.prepare(
+        "SELECT COALESCE(SUM(b.size), 0) AS n FROM repository_blobs AS rb JOIN blobs AS b ON b.digest = rb.digest",
+      ),
+    ]);
+
+    const count = (index: number): number => results[index]?.results[0]?.n ?? 0;
+    const blobRow = results[3]?.results[0];
+    const storageBytes = blobRow?.bytes ?? 0;
+    const referencedBytes = count(4);
+
+    return {
+      repositories: count(0),
+      tags: count(1),
+      manifests: count(2),
+      blobs: blobRow?.n ?? 0,
+      storageBytes,
+      referencedBytes,
+      logicalBytes: count(5),
+      reclaimableBytes: Math.max(0, storageBytes - referencedBytes),
+    };
+  }
+
+  /** Repositories the caller may see: everything for an admin, public plus owned otherwise. */
+  async listRepositories(options: {
+    search: string | null;
+    limit: number;
+    visibleTo: { username: string; isAdmin: boolean } | null;
+  }): Promise<RepositorySummary[]> {
+    const filters: string[] = [];
+    const bindings: unknown[] = [];
+
+    if (options.search !== null && options.search !== "") {
+      filters.push("r.name LIKE ?");
+      bindings.push(`%${options.search}%`);
+    }
+
+    if (options.visibleTo === null) {
+      filters.push("r.visibility = 'public'");
+    } else if (!options.visibleTo.isAdmin) {
+      filters.push("(r.visibility = 'public' OR r.name = ? OR r.name LIKE ?)");
+      bindings.push(options.visibleTo.username, `${options.visibleTo.username}/%`);
+    }
+
+    const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
+
+    const rows = await this.db
+      .prepare(
+        `SELECT
+           r.name,
+           r.visibility,
+           r.updated_at,
+           (SELECT COUNT(*) FROM tags t WHERE t.repository = r.name) AS tags,
+           (SELECT COUNT(*) FROM manifests m WHERE m.repository = r.name) AS manifests,
+           (SELECT COALESCE(SUM(b.size), 0) FROM repository_blobs rb
+              JOIN blobs b ON b.digest = rb.digest WHERE rb.repository = r.name) AS size_bytes
+         FROM repositories AS r
+         ${where}
+         ORDER BY r.name ASC
+         LIMIT ?`,
+      )
+      .bind(...bindings, options.limit)
+      .all<{
+        name: string;
+        visibility: Visibility;
+        updated_at: number;
+        tags: number;
+        manifests: number;
+        size_bytes: number;
+      }>();
+
+    return rows.results.map((row) => ({
+      name: row.name,
+      visibility: row.visibility,
+      tags: row.tags,
+      manifests: row.manifests,
+      sizeBytes: row.size_bytes,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async repository(name: string): Promise<RepositoryDetail | null> {
+    const row = await this.db
+      .prepare("SELECT name, visibility, created_at, updated_at FROM repositories WHERE name = ?")
+      .bind(name)
+      .first<{ name: string; visibility: Visibility; created_at: number; updated_at: number }>();
+    if (row === null) return null;
+
+    const size = await this.db
+      .prepare(
+        `SELECT COALESCE(SUM(b.size), 0) AS bytes FROM repository_blobs rb
+         JOIN blobs b ON b.digest = rb.digest WHERE rb.repository = ?`,
+      )
+      .bind(name)
+      .first<{ bytes: number }>();
+
+    return {
+      name: row.name,
+      visibility: row.visibility,
+      sizeBytes: size?.bytes ?? 0,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      tags: await this.tags(name),
+    };
+  }
+
+  async tags(repository: string): Promise<TagSummary[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT t.name, t.manifest_digest, t.updated_at, m.media_type, m.size
+         FROM tags AS t
+         LEFT JOIN manifests AS m ON m.repository = t.repository AND m.digest = t.manifest_digest
+         WHERE t.repository = ?
+         ORDER BY t.name ASC`,
+      )
+      .bind(repository)
+      .all<{
+        name: string;
+        manifest_digest: string;
+        updated_at: number;
+        media_type: string | null;
+        size: number | null;
+      }>();
+
+    return rows.results.map((row) => ({
+      name: row.name,
+      digest: row.manifest_digest,
+      mediaType: row.media_type ?? "",
+      sizeBytes: row.size ?? 0,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async manifest(repository: string, digest: string): Promise<ManifestDetail | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT digest, media_type, artifact_type, size, subject_digest, annotations, created_at
+         FROM manifests WHERE repository = ? AND digest = ?`,
+      )
+      .bind(repository, digest)
+      .first<{
+        digest: string;
+        media_type: string;
+        artifact_type: string | null;
+        size: number;
+        subject_digest: string | null;
+        annotations: string | null;
+        created_at: number;
+      }>();
+    if (row === null) return null;
+
+    const [tags, blobs, referrers] = await Promise.all([
+      this.db
+        .prepare("SELECT name FROM tags WHERE repository = ? AND manifest_digest = ? ORDER BY name")
+        .bind(repository, digest)
+        .all<{ name: string }>(),
+      this.db
+        .prepare(
+          `SELECT mb.blob_digest AS digest, COALESCE(b.size, 0) AS size
+           FROM manifest_blobs mb LEFT JOIN blobs b ON b.digest = mb.blob_digest
+           WHERE mb.repository = ? AND mb.manifest_digest = ?`,
+        )
+        .bind(repository, digest)
+        .all<{ digest: string; size: number }>(),
+      this.db
+        .prepare(
+          `SELECT digest, media_type, artifact_type, size, annotations
+           FROM manifests WHERE repository = ? AND subject_digest = ? ORDER BY created_at`,
+        )
+        .bind(repository, digest)
+        .all<{
+          digest: string;
+          media_type: string;
+          artifact_type: string | null;
+          size: number;
+          annotations: string | null;
+        }>(),
+    ]);
+
+    return {
+      digest: row.digest,
+      mediaType: row.media_type,
+      artifactType: row.artifact_type,
+      size: row.size,
+      subjectDigest: row.subject_digest,
+      annotations: json<Record<string, string>>(row.annotations),
+      createdAt: row.created_at,
+      tags: tags.results.map((tag) => tag.name),
+      blobs: blobs.results,
+      referrers: referrers.results.map((referrer) => ({
+        digest: referrer.digest,
+        mediaType: referrer.media_type,
+        artifactType: referrer.artifact_type,
+        size: referrer.size,
+        annotations: json<Record<string, string>>(referrer.annotations),
+      })),
+    };
+  }
+
+  async setVisibility(repository: string, visibility: Visibility): Promise<boolean> {
+    const result = await this.db
+      .prepare("UPDATE repositories SET visibility = ?, updated_at = ? WHERE name = ?")
+      .bind(visibility, Date.now(), repository)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  /**
+   * Removes the repository's metadata and unlinks its content. The bytes stay
+   * until garbage collection confirms nothing else links them.
+   */
+  async deleteRepository(repository: string): Promise<boolean> {
+    const results = await this.db.batch([
+      this.db.prepare("DELETE FROM tags WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM manifest_blobs WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM manifest_children WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM manifests WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM repository_blobs WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM lifecycle_policies WHERE repository = ?").bind(repository),
+      this.db.prepare("DELETE FROM repositories WHERE name = ?").bind(repository),
+    ]);
+    return (results[6]?.meta.changes ?? 0) > 0;
+  }
+
+  async policy(repository: string): Promise<LifecyclePolicy | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT repository, enabled, keep_last_tags, untagged_ttl_days FROM lifecycle_policies WHERE repository = ?",
+      )
+      .bind(repository)
+      .first<{
+        repository: string;
+        enabled: number;
+        keep_last_tags: number | null;
+        untagged_ttl_days: number | null;
+      }>();
+    if (row === null) return null;
+    return {
+      repository: row.repository,
+      enabled: row.enabled === 1,
+      keepLastTags: row.keep_last_tags,
+      untaggedTtlDays: row.untagged_ttl_days,
+    };
+  }
+
+  async setPolicy(policy: LifecyclePolicy): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO lifecycle_policies (repository, enabled, keep_last_tags, untagged_ttl_days, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (repository) DO UPDATE SET
+           enabled = excluded.enabled,
+           keep_last_tags = excluded.keep_last_tags,
+           untagged_ttl_days = excluded.untagged_ttl_days,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(
+        policy.repository,
+        policy.enabled ? 1 : 0,
+        policy.keepLastTags,
+        policy.untaggedTtlDays,
+        Date.now(),
+      )
+      .run();
+  }
+
+  async listTokens(userId: string): Promise<AccessTokenSummary[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT id, name, scopes, expires_at, revoked, created_at, last_used_at
+         FROM access_tokens WHERE user_id = ? ORDER BY created_at DESC`,
+      )
+      .bind(userId)
+      .all<{
+        id: string;
+        name: string;
+        scopes: string;
+        expires_at: number | null;
+        revoked: number;
+        created_at: number;
+        last_used_at: number | null;
+      }>();
+
+    return rows.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      scopes: parseScopes(row.scopes),
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at,
+      revoked: row.revoked === 1,
+    }));
+  }
+
+  async createToken(input: {
+    id: string;
+    name: string;
+    userId: string;
+    secretHash: string;
+    scopes: readonly Scope[];
+    expiresAt: number | null;
+  }): Promise<AccessTokenSummary> {
+    const createdAt = Date.now();
+    await this.db
+      .prepare(
+        `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, expires_at, revoked, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      )
+      .bind(
+        input.id,
+        input.name,
+        input.userId,
+        input.secretHash,
+        JSON.stringify(input.scopes),
+        input.expiresAt,
+        createdAt,
+      )
+      .run();
+
+    return {
+      id: input.id,
+      name: input.name,
+      scopes: input.scopes,
+      expiresAt: input.expiresAt,
+      createdAt,
+      lastUsedAt: null,
+      revoked: false,
+    };
+  }
+
+  async revokeToken(userId: string, tokenId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM access_tokens WHERE id = ? AND user_id = ?")
+      .bind(tokenId, userId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async listUsers(): Promise<UserSummary[]> {
+    const rows = await this.db
+      .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users ORDER BY username")
+      .all<{
+        id: string;
+        username: string;
+        email: string | null;
+        is_admin: number;
+        disabled: number;
+        created_at: number;
+      }>();
+
+    return rows.results.map((row) => ({
+      id: row.id,
+      username: row.username,
+      email: row.email,
+      isAdmin: row.is_admin === 1,
+      disabled: row.disabled === 1,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async createUser(input: {
+    id: string;
+    username: string;
+    email: string | null;
+    passwordHash: string;
+    isAdmin: boolean;
+  }): Promise<UserSummary> {
+    const now = Date.now();
+    await this.db
+      .prepare(
+        `INSERT INTO users (id, username, email, password_hash, is_admin, disabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+      )
+      .bind(input.id, input.username, input.email, input.passwordHash, input.isAdmin ? 1 : 0, now, now)
+      .run();
+
+    return {
+      id: input.id,
+      username: input.username,
+      email: input.email,
+      isAdmin: input.isAdmin,
+      disabled: false,
+      createdAt: now,
+    };
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = await this.db.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  /**
+   * Materialises the bootstrap administrator as a real row.
+   *
+   * The bootstrap admin authenticates against a secret, not the database, so it
+   * has no `users` row - and access tokens carry a foreign key to one. Creating
+   * the row on first use lets the operator issue tokens without first inventing
+   * a second account.
+   */
+  async ensureBootstrapUser(username: string): Promise<void> {
+    const now = Date.now();
+    await this.db
+      .prepare(
+        `INSERT INTO users (id, username, email, password_hash, is_admin, disabled, created_at, updated_at)
+         VALUES ('bootstrap', ?, NULL, 'external:bootstrap', 1, 0, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET username = excluded.username, updated_at = excluded.updated_at`,
+      )
+      .bind(username, now, now)
+      .run();
+  }
+
+  /**
+   * Repository names for `GET /v2/_catalog`.
+   *
+   * A caller only ever sees what they could pull: everything for an
+   * administrator, otherwise the public repositories plus the ones they own.
+   * Listing a private name is itself a disclosure, so the filter belongs in the
+   * query rather than in the caller.
+   */
+  async catalog(
+    limit: number,
+    last: string | null,
+    viewer: { username: string; isAdmin: boolean } | null,
+  ): Promise<{ names: string[]; hasMore: boolean }> {
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+
+    if (last !== null) {
+      conditions.push("name > ?");
+      bindings.push(last);
+    }
+
+    if (viewer === null) {
+      conditions.push("visibility = 'public'");
+    } else if (!viewer.isAdmin) {
+      conditions.push("(visibility = 'public' OR name = ? OR name LIKE ?)");
+      bindings.push(viewer.username, `${viewer.username}/%`);
+    }
+
+    const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
+
+    const rows = await this.db
+      .prepare(`SELECT name FROM repositories ${where} ORDER BY name ASC LIMIT ?`)
+      .bind(...bindings, limit + 1)
+      .all<{ name: string }>();
+
+    const names = rows.results.map((row) => row.name);
+    const hasMore = names.length > limit;
+    return { names: hasMore ? names.slice(0, limit) : names, hasMore };
+  }
+}

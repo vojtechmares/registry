@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+coverage/
+.wrangler/
+.dev.vars
+*.local
+.DS_Store
+
+# Reference material: upstream checkouts, not part of this repo.
+references/
+
+# Conformance suite artefacts.
+conformance.test
+junit.xml
+report.html
+.conformance/
