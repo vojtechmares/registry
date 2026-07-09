@@ -11,14 +11,14 @@ Inspired by [cloudflare/serverless-registry](https://github.com/cloudflare/serve
 
 A pnpm workspace, one package per concern.
 
-| Package | What it holds |
-| --- | --- |
-| `packages/oci` | Spec primitives with no dependencies: a resumable SHA-256, digest and repository-name validation, manifest parsing, error codes. |
+| Package                  | What it holds                                                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/oci`           | Spec primitives with no dependencies: a resumable SHA-256, digest and repository-name validation, manifest parsing, error codes.                                      |
 | `packages/registry-core` | The whole `/v2` distribution API, written against storage interfaces (ports) rather than any platform. This is where the spec lives, and where most of the tests run. |
-| `packages/api-contract` | Types shared by the management API and the dashboard. |
-| `packages/ui` | Shared shadcn/ui component library. |
-| `apps/registry` | The Cloudflare Worker: R2, D1, and Durable Object adapters for the core's ports, plus authentication, rate limiting, lifecycle, and the management API. |
-| `apps/web` | The dashboard and public browse UI (TanStack Router/Query/Store, Vite). |
+| `packages/api-contract`  | Types shared by the management API and the dashboard.                                                                                                                 |
+| `packages/ui`            | Shared shadcn/ui component library.                                                                                                                                   |
+| `apps/registry`          | The Cloudflare Worker: R2, D1, and Durable Object adapters for the core's ports, plus authentication, rate limiting, lifecycle, and the management API.               |
+| `apps/web`               | The dashboard and public browse UI (TanStack Router/Query/Store, Vite).                                                                                               |
 
 The split is deliberate: `registry-core` never imports a Cloudflare type, so the
 distribution logic is exercised end to end against in-memory stores in
@@ -86,16 +86,16 @@ Production is served at `registry.mareshq.com`.
 
 Worker behaviour is set through `vars` in `wrangler.jsonc`:
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `ALLOW_ANONYMOUS_PULL` | `true` | Serve public repositories without credentials. |
-| `ENABLE_DELETES` | `true` | Allow blob and manifest deletion. |
-| `VALIDATE_BLOB_REFERENCES` | `true` | Reject a manifest whose config or layers are absent. |
-| `VALIDATE_MANIFEST_REFERENCES` | `false` | Reject an index whose children are absent (off: clients push in any order). |
-| `AUTOMATIC_CROSS_MOUNT` | `true` | Mount a blob without `from`, but only from a repository the caller can already pull. |
-| `RATE_LIMIT_IP_RPM` | `1200` | Per-source-address request budget. |
-| `RATE_LIMIT_USER_RPM` | `3000` | Per-principal request budget. |
-| `UNTAGGED_MANIFEST_TTL_DAYS` | `0` | Retire untagged manifests older than this (0 disables). |
+| Variable                       | Default | Meaning                                                                              |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------ |
+| `ALLOW_ANONYMOUS_PULL`         | `true`  | Serve public repositories without credentials.                                       |
+| `ENABLE_DELETES`               | `true`  | Allow blob and manifest deletion.                                                    |
+| `VALIDATE_BLOB_REFERENCES`     | `true`  | Reject a manifest whose config or layers are absent.                                 |
+| `VALIDATE_MANIFEST_REFERENCES` | `false` | Reject an index whose children are absent (off: clients push in any order).          |
+| `AUTOMATIC_CROSS_MOUNT`        | `true`  | Mount a blob without `from`, but only from a repository the caller can already pull. |
+| `RATE_LIMIT_IP_RPM`            | `1200`  | Per-source-address request budget.                                                   |
+| `RATE_LIMIT_USER_RPM`          | `3000`  | Per-principal request budget.                                                        |
+| `UNTAGGED_MANIFEST_TTL_DAYS`   | `0`     | Retire untagged manifests older than this (0 disables).                              |
 
 Secrets (`JWT_SECRET`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD_HASH`)
 are set with `wrangler secret put`.

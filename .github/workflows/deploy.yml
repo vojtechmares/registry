@@ -1,0 +1,48 @@
+name: Deploy
+
+# Deploy only after CI has passed on main, or on an explicit manual trigger.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys race the same environment.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    # A manual run has no workflow_run to inspect; a CI-triggered run must have succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The dashboard is bundled into the Worker as static assets, so it must be
+      # built before the Worker is deployed.
+      - name: Build the dashboard
+        run: pnpm --filter @registry/web build
+
+      # Schema first, so the new code never runs against an old database.
+      - name: Apply D1 migrations
+        run: pnpm --filter @registry/worker exec wrangler d1 migrations apply registry --remote --env production
+
+      - name: Deploy the Worker
+        run: pnpm --filter @registry/worker exec wrangler deploy --env production

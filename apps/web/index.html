@@ -12,7 +12,8 @@
         const stored = localStorage.getItem("theme");
         const dark =
           stored === "dark" ||
-          ((stored === null || stored === "system") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          ((stored === null || stored === "system") &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.add(dark ? "dark" : "light");
       })();
     </script>

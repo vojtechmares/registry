@@ -15,7 +15,7 @@
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/v2/*", "/api/*", "/healthz"]
+    "run_worker_first": ["/v2/*", "/api/*", "/healthz"],
   },
 
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "registry-content" }],
@@ -25,22 +25,22 @@
       "binding": "DB",
       "database_name": "registry",
       "database_id": "4b885d65-0fbc-4ac2-8c35-3b0f5f10689b",
-      "migrations_dir": "migrations"
-    }
+      "migrations_dir": "migrations",
+    },
   ],
 
   "durable_objects": {
     "bindings": [
       { "name": "UPLOAD_SESSION", "class_name": "UploadSessionObject" },
-      { "name": "RATE_LIMITER", "class_name": "RateLimiterObject" }
-    ]
+      { "name": "RATE_LIMITER", "class_name": "RateLimiterObject" },
+    ],
   },
 
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["UploadSessionObject", "RateLimiterObject"]
-    }
+      "new_sqlite_classes": ["UploadSessionObject", "RateLimiterObject"],
+    },
   ],
 
   // Nightly maintenance: lifecycle policies, then garbage collection.
@@ -57,7 +57,7 @@
     "RATE_LIMIT_IP_RPM": "1200",
     "RATE_LIMIT_USER_RPM": "3000",
     "TOKEN_TTL_SECONDS": "300",
-    "UNTAGGED_MANIFEST_TTL_DAYS": "0"
+    "UNTAGGED_MANIFEST_TTL_DAYS": "0",
   },
 
   "env": {
@@ -67,7 +67,7 @@
         "directory": "../web/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/v2/*", "/api/*", "/healthz"]
+        "run_worker_first": ["/v2/*", "/api/*", "/healthz"],
       },
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "registry-content" }],
       "d1_databases": [
@@ -75,14 +75,14 @@
           "binding": "DB",
           "database_name": "registry",
           "database_id": "4b885d65-0fbc-4ac2-8c35-3b0f5f10689b",
-          "migrations_dir": "migrations"
-        }
+          "migrations_dir": "migrations",
+        },
       ],
       "durable_objects": {
         "bindings": [
           { "name": "UPLOAD_SESSION", "class_name": "UploadSessionObject" },
-          { "name": "RATE_LIMITER", "class_name": "RateLimiterObject" }
-        ]
+          { "name": "RATE_LIMITER", "class_name": "RateLimiterObject" },
+        ],
       },
       "triggers": { "crons": ["17 3 * * *"] },
       "vars": {
@@ -96,10 +96,10 @@
         "RATE_LIMIT_IP_RPM": "600",
         "RATE_LIMIT_USER_RPM": "3000",
         "TOKEN_TTL_SECONDS": "300",
-        "UNTAGGED_MANIFEST_TTL_DAYS": "0"
-      }
-    }
-  }
+        "UNTAGGED_MANIFEST_TTL_DAYS": "0",
+      },
+    },
+  },
 
   // Secrets, set with `wrangler secret put`:
   //   JWT_SECRET

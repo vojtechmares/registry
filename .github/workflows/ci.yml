@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint (prettier)
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Covers every package, including the Worker integration tests that run
+      # against real Durable Objects, R2, and D1 under @cloudflare/vitest-pool-workers.
+      - name: Test
+        run: pnpm test
+
+  conformance:
+    name: OCI conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - run: pnpm install --frozen-lockfile
+
+      # The upstream suite is a gitignored checkout locally; fetch the pinned
+      # release the implementation was validated against.
+      - name: Fetch OCI distribution-spec conformance suite
+        run: |
+          git clone --depth 1 --branch v1.1.1 \
+            https://github.com/opencontainers/distribution-spec.git \
+            references/opencontainers-distribution-spec
+
+      # The Worker refuses to start without these; the bootstrap hash must be
+      # produced by this repo's hasher so it verifies under the Workers runtime.
+      - name: Configure the Worker for local runs
+        run: |
+          HASH="$(node scripts/hash-password.mjs 'conformance-password')"
+          cat > apps/registry/.dev.vars <<EOF
+          JWT_SECRET=ci-conformance-secret-not-for-production
+          BOOTSTRAP_ADMIN_USERNAME=conformance
+          BOOTSTRAP_ADMIN_PASSWORD_HASH=$HASH
+          EOF
+
+      - name: Run the OCI conformance suite
+        run: pnpm conformance
+
+      - name: Upload the conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: .conformance/report.html
+          if-no-files-found: ignore
