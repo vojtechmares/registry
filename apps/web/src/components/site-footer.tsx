@@ -36,20 +36,7 @@ export function SiteFooter() {
             <p className="mt-3 max-w-xs text-sm text-muted-foreground">
               A serverless OCI registry on Cloudflare.
             </p>
-            <dl className="mt-6 space-y-3 text-xs">
-              <div>
-                <dt className="text-muted-foreground">Endpoint</dt>
-                <dd className="mt-0.5">
-                  <code className="font-mono">/v2/</code>
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">Conformance</dt>
-                <dd className="mt-0.5">
-                  <code className="font-mono">OCI distribution-spec</code>
-                </dd>
-              </div>
-            </dl>
+            <p className="mt-6 text-xs text-muted-foreground">Compatible with the Registry v2 API.</p>
           </div>
 
           <nav aria-label="Registry">
@@ -92,16 +79,6 @@ export function SiteFooter() {
                   OCI distribution spec
                 </FooterExternalLink>
               </li>
-              <li>
-                <FooterExternalLink href="https://workers.cloudflare.com">
-                  Cloudflare Workers
-                </FooterExternalLink>
-              </li>
-              <li>
-                <FooterExternalLink href="https://github.com/cloudflare/serverless-registry">
-                  cloudflare/serverless-registry
-                </FooterExternalLink>
-              </li>
             </ul>
           </nav>
 
@@ -116,7 +93,16 @@ export function SiteFooter() {
 
         <div className="flex flex-col items-center gap-2 border-t py-6 md:flex-row md:justify-between">
           <p className="text-xs text-muted-foreground">
-            &copy; {new Date().getFullYear()} registry. Built on Cloudflare Workers.
+            &copy; {new Date().getFullYear()}{" "}
+            <a
+              href="https://www.mares.cz"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground"
+            >
+              Vojtěch Mareš
+            </a>
+            . Built on Cloudflare.
           </p>
           <span aria-hidden="true" className="font-mono text-xs text-muted-foreground/60 select-none">
             ~ eof
