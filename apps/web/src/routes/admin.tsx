@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { createRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { UserSummary } from "@registry/api-contract";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@workspace/ui/components/dialog";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -74,20 +84,91 @@ function Overview() {
   );
 }
 
+/**
+ * Changing an address.
+ *
+ * A dialog rather than an editable cell, because saving an address the moment
+ * focus leaves the field is how one gets typed into the wrong row.
+ */
+function ChangeEmail({ user }: { user: UserSummary }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState(user.email ?? "");
+
+  const save = useMutation({
+    mutationFn: () => api.updateUser(user.id, { email }),
+    onSuccess: () => {
+      toast.success(`Updated ${user.username}`);
+      setOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save the email"),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Reopening after a failed save should not show the rejected address.
+        if (next) setEmail(user.email ?? "");
+        setOpen(next);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm">
+          Email
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Email for {user.username}</DialogTitle>
+          <DialogDescription>No two accounts may share an address.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            save.mutate();
+          }}
+        >
+          <div className="space-y-2">
+            <Label htmlFor={`email-${user.id}`}>Address</Label>
+            <Input
+              id={`email-${user.id}`}
+              type="email"
+              required
+              value={email}
+              placeholder="alice@example.com"
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={save.isPending}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function Users() {
   const queryClient = useQueryClient();
   const { data, isPending } = useQuery({ queryKey: ["users"], queryFn: api.users });
 
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   // Named apart from the imported `isAdmin` guard, which this would otherwise shadow.
   const [makeAdmin, setMakeAdmin] = useState(false);
 
   const create = useMutation({
-    mutationFn: () => api.createUser({ username, password, isAdmin: makeAdmin }),
+    mutationFn: () => api.createUser({ username, email, password, isAdmin: makeAdmin }),
     onSuccess: () => {
       toast.success(`Created ${username}`);
       setUsername("");
+      setEmail("");
       setPassword("");
       setMakeAdmin(false);
       void queryClient.invalidateQueries({ queryKey: ["users"] });
@@ -107,7 +188,7 @@ function Users() {
   return (
     <div className="space-y-6">
       <form
-        className="grid gap-4 rounded-md border p-4 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end"
+        className="grid gap-4 rounded-md border p-4 sm:grid-cols-[1fr_1fr_1fr_auto_auto] sm:items-end"
         onSubmit={(event) => {
           event.preventDefault();
           create.mutate();
@@ -116,6 +197,17 @@ function Users() {
         <div className="space-y-2">
           <Label htmlFor="new-username">Username</Label>
           <Input id="new-username" required value={username} onChange={(e) => setUsername(e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="new-email">Email</Label>
+          <Input
+            id="new-email"
+            type="email"
+            required
+            placeholder="alice@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
         </div>
         <div className="space-y-2">
           <Label htmlFor="new-password">Password</Label>
@@ -145,15 +237,19 @@ function Users() {
           <TableHeader>
             <TableRow>
               <TableHead>Username</TableHead>
+              <TableHead>Email</TableHead>
               <TableHead className="w-24">Role</TableHead>
               <TableHead className="w-40">Created</TableHead>
-              <TableHead className="w-24" />
+              <TableHead className="w-40" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.map((user) => (
               <TableRow key={user.id}>
                 <TableCell className="font-medium">{user.username}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {user.email ?? <span className="italic">none</span>}
+                </TableCell>
                 <TableCell>
                   <Badge variant={user.isAdmin ? "secondary" : "outline"}>
                     {user.isAdmin ? "admin" : "member"}
@@ -161,6 +257,7 @@ function Users() {
                 </TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(user.createdAt)}</TableCell>
                 <TableCell className="text-right">
+                  <ChangeEmail user={user} />
                   <Button
                     variant="ghost"
                     size="sm"

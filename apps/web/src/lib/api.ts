@@ -153,8 +153,15 @@ export const api = {
 
   users: () => request<{ users: UserSummary[] }>("/users").then((r) => r.users),
 
-  createUser: (input: { username: string; password: string; email?: string; isAdmin?: boolean }) =>
+  createUser: (input: { username: string; password: string; email: string; isAdmin?: boolean }) =>
     request<UserSummary>("/users", { method: "POST", body: JSON.stringify(input) }),
+
+  /** An administrator may change any address; anyone else may change only their own. */
+  updateUser: (id: string, input: { email: string }) =>
+    request<UserSummary>(`/users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
 
   deleteUser: (id: string) => request<void>(`/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 

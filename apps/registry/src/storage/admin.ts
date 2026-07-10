@@ -530,6 +530,48 @@ export class AdminStore {
     }));
   }
 
+  /** The id of the account holding this address, or null. Addresses are stored lowercase. */
+  async findUserIdByEmail(email: string): Promise<string | null> {
+    const row = await this.db
+      .prepare("SELECT id FROM users WHERE email = ?")
+      .bind(email)
+      .first<{ id: string }>();
+    return row?.id ?? null;
+  }
+
+  /** Sets or clears a user's address. Null when the user does not exist. */
+  async setUserEmail(id: string, email: string | null): Promise<UserSummary | null> {
+    const result = await this.db
+      .prepare("UPDATE users SET email = ?, updated_at = ? WHERE id = ?")
+      .bind(email, Date.now(), id)
+      .run();
+    if ((result.meta.changes ?? 0) === 0) return null;
+
+    return this.db
+      .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE id = ?")
+      .bind(id)
+      .first<{
+        id: string;
+        username: string;
+        email: string | null;
+        is_admin: number;
+        disabled: number;
+        created_at: number;
+      }>()
+      .then((row) =>
+        row === null
+          ? null
+          : {
+              id: row.id,
+              username: row.username,
+              email: row.email,
+              isAdmin: row.is_admin === 1,
+              disabled: row.disabled === 1,
+              createdAt: row.created_at,
+            },
+      );
+  }
+
   async createUser(input: {
     id: string;
     username: string;
@@ -616,16 +658,27 @@ export class AdminStore {
     const id = crypto.randomUUID();
     const username = await this.availableUsername(input.username);
 
+    // An address already held by another account is dropped rather than allowed
+    // to fail the sign-in. Accounts are linked by (issuer, subject), never by
+    // email, so the address is informational and its loss costs the new account
+    // nothing an administrator cannot restore. Refusing to sign the user in
+    // because a stranger claimed their address would cost rather more.
+    const email = input.email === null ? null : await this.emailIfFree(input.email);
+
     await this.db
       .prepare(
         `INSERT INTO users
            (id, username, email, password_hash, is_admin, disabled, created_at, updated_at, oidc_issuer, oidc_subject)
          VALUES (?, ?, ?, 'external:oidc', ?, 0, ?, ?, ?, ?)`,
       )
-      .bind(id, username, input.email, input.isAdmin ? 1 : 0, now, now, input.issuer, input.subject)
+      .bind(id, username, email, input.isAdmin ? 1 : 0, now, now, input.issuer, input.subject)
       .run();
 
-    return { id, username, email: input.email, isAdmin: input.isAdmin, disabled: false, createdAt: now };
+    return { id, username, email, isAdmin: input.isAdmin, disabled: false, createdAt: now };
+  }
+
+  private async emailIfFree(email: string): Promise<string | null> {
+    return (await this.findUserIdByEmail(email)) === null ? email : null;
   }
 
   /** `alice`, then `alice-2`, and so on. A username is a namespace, and two people cannot share one. */

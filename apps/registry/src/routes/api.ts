@@ -38,6 +38,8 @@ import {
   badRequest,
   conflict,
   forbidden,
+  isEmailAddress,
+  normalizeEmail,
   notFound,
   optionalPositive,
   readJson,
@@ -167,7 +169,7 @@ async function dispatch(ctx: Context): Promise<Response> {
   if (path === "/tokens") return request.method === "GET" ? listTokens(ctx) : createToken(ctx);
   if (path.startsWith("/tokens/")) return revokeToken(ctx, path.slice("/tokens/".length));
   if (path === "/users") return request.method === "GET" ? listUsers(ctx) : createUser(ctx);
-  if (path.startsWith("/users/")) return deleteUser(ctx, path.slice("/users/".length));
+  if (path.startsWith("/users/")) return userRoute(ctx, path.slice("/users/".length));
 
   // Ahead of `handleProjects`, so that minting a token stays beside the other
   // token routes and next to `authorizeFor`, which decides what it may grant.
@@ -299,7 +301,9 @@ async function oidcCallback(ctx: Context): Promise<Response> {
     issuer: claims.iss,
     subject: claims.sub,
     username: usernameFor(claims),
-    email: claims.email ?? null,
+    // Normalised on the way in, or the unique index over `users.email` would
+    // let a provider's `Alice@` sit beside a local `alice@`.
+    email: normalizeEmail(claims.email),
     isAdmin: isAdminByGroups(claims, config),
   });
 
@@ -601,6 +605,8 @@ async function createUser(ctx: Context): Promise<Response> {
     throw badRequest("password must be at least 12 characters");
   }
 
+  const email = await requireFreeEmail(ctx, body.email, null);
+
   if ((await ctx.auth.findUserByUsername(body.username)) !== null) {
     throw conflict(`user "${body.username}" already exists`);
   }
@@ -608,7 +614,7 @@ async function createUser(ctx: Context): Promise<Response> {
   const user = await ctx.admin.createUser({
     id: crypto.randomUUID(),
     username: body.username,
-    email: typeof body.email === "string" && body.email !== "" ? body.email : null,
+    email,
     passwordHash: await hashPassword(body.password),
     isAdmin: body.isAdmin === true,
   });
@@ -616,13 +622,50 @@ async function createUser(ctx: Context): Promise<Response> {
   return Response.json(user, { status: 201 });
 }
 
-async function deleteUser(ctx: Context, id: string): Promise<Response> {
+/**
+ * A valid address that no other account holds.
+ *
+ * `owner` is the account the address is being assigned to, so that saving a
+ * user without changing their email is not a conflict with themselves. The
+ * check races the unique index, which is the thing that actually decides;
+ * losing the race gives a 500 rather than a 409, and no duplicate.
+ */
+async function requireFreeEmail(ctx: Context, raw: unknown, owner: string | null): Promise<string> {
+  const email = normalizeEmail(raw);
+  if (email === null) throw badRequest("email is required");
+  if (!isEmailAddress(email)) throw badRequest(`"${email}" is not an email address`);
+
+  const holder = await ctx.admin.findUserIdByEmail(email);
+  if (holder !== null && holder !== owner) throw conflict(`"${email}" is already in use`);
+  return email;
+}
+
+/** `/users/:id`. `DELETE` removes the account; `PATCH` changes its address. */
+async function userRoute(ctx: Context, id: string): Promise<Response> {
+  if (ctx.request.method === "PATCH") return updateUser(ctx, id);
   if (ctx.request.method !== "DELETE") throw notFound();
+
   const identity = requireAdmin(ctx.principal);
   if (identity.id === id) throw badRequest("you cannot delete your own account");
   if (id === "bootstrap") throw badRequest("the bootstrap administrator cannot be deleted");
   if (!(await ctx.admin.deleteUser(id))) throw notFound();
   return new Response(null, { status: 204 });
+}
+
+/** An administrator may change any address; anyone else may change only their own. */
+async function updateUser(ctx: Context, id: string): Promise<Response> {
+  const identity = requireUser(ctx.principal);
+  if (!identity.isAdmin && identity.id !== id) {
+    throw forbidden("you may only change your own email address");
+  }
+
+  const body = await readJson<{ email?: unknown }>(ctx.request);
+  if (!("email" in body)) throw badRequest("email is required");
+
+  const email = await requireFreeEmail(ctx, body.email, id);
+  const user = await ctx.admin.setUserEmail(id, email);
+  if (user === null) throw notFound(`user "${id}" does not exist`);
+  return Response.json(user);
 }
 
 /** `GET /v2/_catalog` - the Docker catalog endpoint, outside the OCI spec but widely used. */

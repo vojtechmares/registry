@@ -32,6 +32,7 @@ import {
   badRequest,
   conflict,
   forbidden,
+  isEmailAddress,
   notFound,
   optionalPositive,
   readJson,
@@ -329,14 +330,6 @@ async function executions(ctx: ProjectContext, name: string): Promise<Response> 
   const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
   const history: ReplicationExecution[] = await ctx.replication.executions(name, limit);
   return Response.json({ executions: history });
-}
-
-/**
- * Rudimentary, and knowingly so. An address is only ever handed to the mail
- * provider, which is the thing that actually knows whether it can be reached.
- */
-function isEmailAddress(value: string): boolean {
-  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(value) && value.length <= 254;
 }
 
 async function notificationPolicies(ctx: ProjectContext, name: string): Promise<Response> {
