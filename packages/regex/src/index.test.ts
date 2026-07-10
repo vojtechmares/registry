@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { RegexSyntaxError, compileRegex, isValidRegex, matchesRegex, testRegex } from "./index.js";
+import {
+  MAX_PROGRAM_LENGTH,
+  RegexSyntaxError,
+  cacheStats,
+  compileRegex,
+  isValidRegex,
+  matchesRegex,
+  testRegex,
+} from "./index.js";
 
 /** `testRegex` compiles and searches; every case here reads as "does this pattern find this string". */
 const hits = (pattern: string, input: string): boolean => testRegex(pattern, input);
@@ -284,5 +292,18 @@ describe("api", () => {
   it("isValidRegex agrees with compileRegex", () => {
     expect(isValidRegex("^v\\d+$")).toBe(true);
     expect(isValidRegex("(a")).toBe(false);
+  });
+
+  it("bounds the compiled cache by instructions, not only by entries", () => {
+    // A project owner may write as many cleanup rules as they like, and each
+    // one is compiled and cached. Counting entries alone would let a hundred
+    // and twenty-eight maximal programs sit in the isolate at once.
+    for (let i = 0; i < 40; i++) testRegex(`a{1000}b${i}`, "nothing");
+
+    const { entries, instructions } = cacheStats();
+    expect(instructions).toBeLessThanOrEqual(4 * MAX_PROGRAM_LENGTH);
+    expect(entries).toBeLessThan(40);
+    // And the cache still works: the most recent pattern is still answered.
+    expect(testRegex("a{1000}b39", "nothing")).toBe(false);
   });
 });

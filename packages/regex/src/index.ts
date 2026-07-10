@@ -1,4 +1,4 @@
-import { type Program, compile } from "./compile.js";
+import { MAX_PROGRAM_LENGTH, type Program, compile } from "./compile.js";
 import { search } from "./exec.js";
 import { parse } from "./parse.js";
 
@@ -49,23 +49,43 @@ export function matchesRegex(regex: Regex, input: string): boolean {
  * in a repository and recompiling per tag is the only cost worth avoiding here.
  * A source that does not compile is cached as `null`, so a broken rule is not
  * re-parsed once per tag either.
+ *
+ * Bounded by instructions as well as by entries. A hundred and twenty-eight
+ * maximal programs is tens of megabytes, and a project owner can write as many
+ * cleanup rules as they like: counting entries alone would let one of them
+ * exhaust the isolate's memory. A realistic tag pattern compiles to fewer than
+ * a hundred instructions, so neither bound is reached in practice.
  */
 const CACHE_LIMIT = 128;
+const CACHE_INSTRUCTION_BUDGET = 4 * MAX_PROGRAM_LENGTH;
+
 const cache = new Map<string, Regex | null>();
+let cachedInstructions = 0;
+
+/** Oldest first, until both bounds hold. A `null` entry costs no instructions. */
+function evict(): void {
+  while (cache.size > CACHE_LIMIT || cachedInstructions > CACHE_INSTRUCTION_BUDGET) {
+    const oldest = cache.keys().next();
+    if (oldest.done) return;
+    cachedInstructions -= cache.get(oldest.value)?.program.length ?? 0;
+    cache.delete(oldest.value);
+  }
+}
 
 function cached(source: string): Regex | null {
   const hit = cache.get(source);
   if (hit !== undefined || cache.has(source)) return hit ?? null;
 
   const regex = tryCompileRegex(source);
-  if (cache.size >= CACHE_LIMIT) {
-    // Insertion order: the oldest entry goes. A cleanup run touches a handful
-    // of rules, so this only ever evicts across unrelated projects.
-    const oldest = cache.keys().next();
-    if (!oldest.done) cache.delete(oldest.value);
-  }
   cache.set(source, regex);
+  cachedInstructions += regex?.program.length ?? 0;
+  evict();
   return regex;
+}
+
+/** What the compiled cache currently holds. For tests and diagnostics. */
+export function cacheStats(): { entries: number; instructions: number } {
+  return { entries: cache.size, instructions: cachedInstructions };
 }
 
 /** Whether `source` matches `input`. A pattern that does not compile matches nothing. */

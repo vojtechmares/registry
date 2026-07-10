@@ -194,6 +194,9 @@ function validRemoteUrl(raw: unknown): string {
   return url.origin;
 }
 
+/** Bounds the work one scheduled cleanup can be asked to do. */
+const MAX_CLEANUP_RULES = 32;
+
 /**
  * Why the pattern will not compile, or null.
  *
@@ -557,6 +560,12 @@ async function cleanupPolicy(ctx: ProjectContext, name: string): Promise<Respons
     throw badRequest("schedule must be a five-field cron expression, in UTC");
   }
   if (!Array.isArray(body.rules)) throw badRequest("rules must be an array");
+  // Every rule is compiled and then evaluated against every tag in the project,
+  // on a cron that shares a Worker's CPU budget with everything else. A policy
+  // that needs more than this many rules is expressing something else.
+  if (body.rules.length > MAX_CLEANUP_RULES) {
+    throw badRequest(`a policy may hold at most ${MAX_CLEANUP_RULES} rules`);
+  }
   if (typeof body.enabled !== "boolean") throw badRequest("enabled must be a boolean");
 
   const input: CleanupPolicyInput = {

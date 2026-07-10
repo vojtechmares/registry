@@ -319,6 +319,21 @@ describe("the cleanup policy API", () => {
     expect(response.status).toBe(400);
   });
 
+  it("refuses a policy with more rules than a cron can afford to run", async () => {
+    await seedProject({ name: "api-clean-many" });
+    const one = { repositories: "*", tags: {}, keepLast: 1, keepWithinDays: null };
+    const response = await call("PUT", "/api/v1/projects/api-clean-many/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        rules: Array.from({ length: 33 }, () => one),
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { message: string }).message).toContain("at most 32 rules");
+  });
+
   it("accepts and stores a rule that selects by regex", async () => {
     await seedProject({ name: "api-clean-re2" });
     const nightly = {
