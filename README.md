@@ -35,8 +35,14 @@ suite is the only thing that needs real infrastructure.
 - Authentication: password (PBKDF2) and machine-to-machine tokens, with the
   Docker bearer-token flow and scoped permissions. Every token is pinned to one
   project and managed from it; there is no registry-wide machine credential.
-- Rate limiting via a Durable Object token bucket, priced so credential checking
-  cannot be used to amplify load.
+- Rate limiting in a Durable Object, so one limit means one thing across the
+  deployment: a token bucket for the registry API, where a push is naturally
+  bursty, and a fixed window for the management API. Requests that may verify a
+  password are metered on a stricter allowance of their own, so credential
+  checking cannot be used to amplify load.
+- A self-describing management API: Hono routes validated with valibot, an
+  OpenAPI 3.1 document at `/api/v1/openapi.json`, and Swagger UI at
+  `/api/v1/docs`.
 - Lifecycle management and refcounted garbage collection on a nightly cron.
 - Per-project immutable tags: a tag names one digest, and neither a push, a
   delete of the tag, a delete of the manifest or repository under it, nor a
@@ -92,6 +98,29 @@ pnpm deploy
 
 Production is served at `registry.mareshq.com`.
 
+## Management API
+
+Everything the dashboard does, `/api/v1` does. It is a Hono app whose routes are
+validated with valibot and which publishes itself:
+
+| Path                   | What it is                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `/api/v1/docs`         | Swagger UI, driving whichever origin served it.                                         |
+| `/api/v1/openapi.json` | The OpenAPI 3.1 document, generated from the routes and the schemas that validate them. |
+
+A caller proves who they are with `Authorization: Basic` (a password or a machine
+token), a bearer token from `/v2/token`, or the dashboard's session cookie.
+
+Two planes, two kinds of credential. A machine token is a data-plane credential:
+it pulls and pushes within a declared set of scopes, pinned to one project, and
+it cannot reach the control plane at all - so a narrow token minted by an
+administrator can never create another administrator.
+
+Every route is metered per source address, and again per authenticated principal.
+Requests that may verify a password are metered a third time, on a stricter
+allowance of their own, so a busy dashboard cannot exhaust the budget its own
+user needs in order to sign back in. A refusal is a `429` with `Retry-After`.
+
 ## Configuration
 
 Worker behaviour is set through `vars` in `wrangler.jsonc`:
@@ -103,7 +132,8 @@ Worker behaviour is set through `vars` in `wrangler.jsonc`:
 | `VALIDATE_BLOB_REFERENCES`     | `true`  | Reject a manifest whose config or layers are absent.                                 |
 | `VALIDATE_MANIFEST_REFERENCES` | `false` | Reject an index whose children are absent (off: clients push in any order).          |
 | `AUTOMATIC_CROSS_MOUNT`        | `true`  | Mount a blob without `from`, but only from a repository the caller can already pull. |
-| `RATE_LIMIT_IP_RPM`            | `1200`  | Per-source-address request budget.                                                   |
+| `RATE_LIMIT_ENABLED`           | `true`  | Turn every limiter off. Zero on either budget below disables that one alone.         |
+| `RATE_LIMIT_IP_RPM`            | `1200`  | Per-source-address request budget. A fifth of it is what a password may spend.       |
 | `RATE_LIMIT_USER_RPM`          | `3000`  | Per-principal request budget.                                                        |
 | `UNTAGGED_MANIFEST_TTL_DAYS`   | `0`     | Retire untagged manifests older than this (0 disables).                              |
 | `AUDIT_RETENTION_DAYS`         | `365`   | Days an audit event is kept (0 keeps everything).                                    |

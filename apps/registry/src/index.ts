@@ -1,5 +1,6 @@
 import { OciError } from "@registry/oci";
 import { errorResponse, handleRegistryRequest, type RegistryContext } from "@registry/registry-core";
+import { apiApp } from "./api/app.js";
 import { AuditStore, actorOf } from "./audit/store.js";
 import { auditEntriesFor } from "./audit/translate.js";
 import { createAuthorize } from "./auth/authorize.js";
@@ -17,7 +18,7 @@ import { ProjectPolicy } from "./policy.js";
 import { REPLICATE_TASK, handleReplicateTask, runDueReplications } from "./replication/execute.js";
 import { triggerReplication } from "./replication/trigger.js";
 import { enforceAddressRateLimit, enforcePrincipalRateLimit } from "./rate-limit.js";
-import { handleApiRequest, handleCatalog } from "./routes/api.js";
+import { handleCatalog } from "./routes/catalog.js";
 import { handleToken } from "./routes/token.js";
 import { R2ContentStore } from "./storage/content.js";
 import { D1MetadataStore } from "./storage/metadata.js";
@@ -117,11 +118,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   const config = readConfig(env, request);
   if (config.jwtSecret === "") throw new Error("JWT_SECRET is not configured");
 
-  if (url.pathname.startsWith("/api/")) {
-    await enforceAddressRateLimit(env, request, url.pathname);
-    const response = await handleApiRequest(request, env, config);
-    return response ?? notFound();
-  }
+  // The management API is a Hono app: it authenticates, rate limits, validates
+  // and documents itself, and answers everything under its prefix - including
+  // the paths it does not recognise.
+  if (url.pathname.startsWith("/api/")) return apiApp(env).fetch(request, env, ctx);
 
   // Anything that is neither the registry nor the management API is the
   // dashboard, served from the bundled static assets.

@@ -34,6 +34,27 @@ export function identityOf(principal: Principal): Identity | null {
   return principal.kind === "anonymous" ? null : principal.identity;
 }
 
+/**
+ * Who the storage layer should show repositories and projects to. Structurally
+ * a `Viewer`; null for an anonymous caller, who sees only what is public.
+ */
+export function viewerOf(principal: Principal): Identity | null {
+  return identityOf(principal);
+}
+
+/**
+ * The project a machine token is pinned to, or null.
+ *
+ * A pinned token acts as its owner but must never see past its own project - so
+ * the listing and visibility routes, which otherwise read the owner's full
+ * view, intersect that view with the pin. Without this a token scoped to one
+ * project could enumerate every repository and project its owner (perhaps an
+ * administrator) can see.
+ */
+export function tokenProjectPin(principal: Principal): string | null {
+  return principal.kind === "token" ? principal.project : null;
+}
+
 function decodeBasic(value: string): { username: string; password: string } | null {
   let decoded: string;
   try {

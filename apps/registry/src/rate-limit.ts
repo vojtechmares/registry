@@ -26,7 +26,7 @@ const PASSWORD_COST = 5;
 /** Endpoints that take a password from the request body rather than a header. */
 const PASSWORD_ENDPOINTS = new Set(["/v2/token", "/api/v1/auth/login"]);
 
-function clientAddress(request: Request): string {
+export function clientAddress(request: Request): string {
   return request.headers.get("CF-Connecting-IP") ?? "unknown";
 }
 

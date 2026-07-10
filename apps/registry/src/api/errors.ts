@@ -1,3 +1,6 @@
+import { OciError } from "@registry/oci";
+import type { ApiErrorBody } from "@registry/api-contract";
+import { HTTPException } from "hono/http-exception";
 import type { Identity, Principal } from "../auth/principal.js";
 
 /** An error the management API renders as `{ error, message }` with a status. */
@@ -17,6 +20,7 @@ export const forbidden = (message = "forbidden") => new ApiError(403, "forbidden
 export const conflict = (message: string) => new ApiError(409, "conflict", message);
 export const unauthenticated = (message = "authentication required") =>
   new ApiError(401, "unauthorized", message);
+export const rateLimited = (message: string) => new ApiError(429, "rate_limited", message);
 
 export function requireIdentity(principal: Principal): Identity {
   if (principal.kind === "anonymous") throw unauthenticated();
@@ -47,53 +51,34 @@ export function requireAdmin(principal: Principal): Identity {
   return identity;
 }
 
-/**
- * A cross-site form post cannot set this header, and `SameSite=Strict` already
- * stops the cookie from riding along. Requiring it makes state-changing calls
- * unreachable from another origin.
- */
-export function requireJsonBody(request: Request): void {
-  const contentType = request.headers.get("Content-Type") ?? "";
-  if (!contentType.startsWith("application/json")) {
-    throw badRequest("mutations must send a JSON body");
-  }
-}
-
-export async function readJson<T>(request: Request): Promise<T> {
-  requireJsonBody(request);
-  try {
-    return (await request.json()) as T;
-  } catch {
-    throw badRequest("body is not valid JSON");
-  }
-}
-
-/** A positive integer, or null. Used for quotas, retention counts, and TTLs. */
-export function optionalPositive(value: unknown, field: string): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw badRequest(`${field} must be a positive integer or null`);
-  }
-  return value;
+function render(status: number, error: string, message: string): Response {
+  const body: ApiErrorBody = { error, message };
+  return Response.json(body, { status });
 }
 
 /**
- * Rudimentary, and knowingly so. An address is only ever handed to the mail
- * provider, which is the thing that actually knows whether it can be reached.
+ * Every error the management API can raise, rendered in the one shape the
+ * dashboard knows how to read.
  */
-export function isEmailAddress(value: string): boolean {
-  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(value) && value.length <= 254;
+export function onError(error: unknown): Response {
+  if (error instanceof ApiError) return render(error.status, error.code, error.message);
+
+  // Raised by the policy hooks and the OCI helpers, which the management API
+  // reaches through the shared authorization code.
+  if (error instanceof OciError) return render(error.status, error.code, error.message);
+
+  if (error instanceof HTTPException) {
+    // The only 400 Hono raises on its own is a body that claimed to be JSON and
+    // was not. Its own message reads "Malformed JSON in request body"; the
+    // dashboard has always been told "body is not valid JSON".
+    if (error.status === 400) return render(400, "invalid_request", "body is not valid JSON");
+    return render(error.status, "error", error.message);
+  }
+
+  console.error("unhandled management API error", error);
+  return render(500, "internal_error", "internal server error");
 }
 
-/**
- * The form an address is stored and compared in, or null when there is none.
- *
- * `Alice@example.com` and `alice@example.com` are one mailbox. Lowercasing on
- * the way in is what makes the unique index over `users.email` mean what it
- * looks like it means.
- */
-export function normalizeEmail(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  const trimmed = raw.trim().toLowerCase();
-  return trimmed === "" ? null : trimmed;
+export function notFoundHandler(): Response {
+  return render(404, "not_found", "not found");
 }
