@@ -52,6 +52,46 @@ describe("matchesTagFilter", () => {
   it("never matches when the range will not parse", () => {
     expect(matchesTagFilter("1.2.3", { semver: "garbage" })).toBe(false);
   });
+
+  it("matches a regular expression", () => {
+    expect(matchesTagFilter("v1.2.3", { regex: "^v\\d+\\.\\d+\\.\\d+$" })).toBe(true);
+    expect(matchesTagFilter("v1.2.3-rc1", { regex: "^v\\d+\\.\\d+\\.\\d+$" })).toBe(false);
+  });
+
+  it("searches with a regular expression, so ^ and $ mean what they say", () => {
+    // Unlike `pattern`, which is an anchored glob. This is what a reader of a
+    // regular expression expects, and the dashboard says so next to the field.
+    expect(matchesTagFilter("v1-rc1", { regex: "rc" })).toBe(true);
+    expect(matchesTagFilter("v1-rc1", { regex: "^rc" })).toBe(false);
+  });
+
+  it("treats an empty regular expression as unset", () => {
+    expect(matchesTagFilter("anything", { regex: "" })).toBe(true);
+  });
+
+  it("never matches when the regular expression will not compile", () => {
+    // The same direction as an unparseable range: a broken filter governs
+    // nothing, so a typo in a cleanup rule deletes nothing.
+    expect(matchesTagFilter("anything", { regex: "(unclosed" })).toBe(false);
+    expect(matchesTagFilter("anything", { regex: "a**" })).toBe(false);
+  });
+
+  it("requires the pattern, the range and the regex when all three are set", () => {
+    const filter = { pattern: "v*", semver: "^1.0.0", regex: "\\.0$" };
+    expect(matchesTagFilter("v1.2.0", filter)).toBe(true);
+    // Fails the regex alone.
+    expect(matchesTagFilter("v1.2.1", filter)).toBe(false);
+    // Fails the pattern alone.
+    expect(matchesTagFilter("1.2.0", filter)).toBe(false);
+    // Fails the range alone.
+    expect(matchesTagFilter("v2.0.0", filter)).toBe(false);
+  });
+
+  it("does not backtrack on a regular expression that would defeat one that did", () => {
+    const started = performance.now();
+    expect(matchesTagFilter("a".repeat(60), { regex: "^(a+)+b$" })).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
 });
 
 describe("sortByPrecedence", () => {

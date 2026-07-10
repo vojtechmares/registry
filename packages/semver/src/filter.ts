@@ -1,3 +1,7 @@
+// A tag filter is not semver, and this package is. It lives here because a
+// replication rule and a cleanup rule both need it and both already need a
+// semver range; the regular-expression engine comes along for the same reason.
+import { testRegex } from "@registry/regex";
 import { satisfies } from "./range.js";
 import { compareVersions, parseVersion } from "./version.js";
 
@@ -7,12 +11,24 @@ import { compareVersions, parseVersion } from "./version.js";
  * A replication rule and a cleanup rule ask the same question of a tag, and
  * getting a different answer from each would be how a tag gets replicated and
  * then immediately deleted. Both ask it here.
+ *
+ * The three criteria conjoin: a tag must satisfy every one that is set. An
+ * unset criterion is `undefined` or the empty string.
  */
 export interface TagFilter {
   /** A glob: `*` for any run of characters, `?` for one. Anchored at both ends. */
   readonly pattern?: string | undefined;
   /** A semver range: `^1.2.3`, `>=1.0.0 <2.0.0`, `1.x`. */
   readonly semver?: string | undefined;
+  /**
+   * A regular expression, searched rather than anchored: `rc` finds `v1-rc1`.
+   * Anchor it with `^` and `$` to demand the whole tag.
+   *
+   * Matched by `@registry/regex`, which cannot backtrack. A cleanup rule runs
+   * unattended against every tag in a project, so a pattern that a native
+   * engine would explore exponentially must not be expressible here.
+   */
+  readonly regex?: string | undefined;
   readonly includePrerelease?: boolean | undefined;
 }
 
@@ -40,6 +56,13 @@ export function matchesTagFilter(tag: string, filter: TagFilter): boolean {
     const options =
       filter.includePrerelease === undefined ? {} : { includePrerelease: filter.includePrerelease };
     if (!satisfies(tag, filter.semver, options)) return false;
+  }
+
+  // A regular expression that will not compile matches nothing, exactly as a
+  // range that will not parse matches nothing. A broken filter governs no tag,
+  // and a rule that governs no tag deletes no tag.
+  if (filter.regex !== undefined && filter.regex !== "" && !testRegex(filter.regex, tag)) {
+    return false;
   }
 
   return true;

@@ -193,17 +193,28 @@ export interface UsageStats {
   readonly repositories?: readonly RepositoryUsage[];
 }
 
+/**
+ * Which tags a rule applies to. Every criterion that is set must hold.
+ *
+ * `pattern` is an anchored glob; `regex` is a searched regular expression, so
+ * `rc` finds `v1-rc1` and `^rc$` does not. The registry matches it with an
+ * engine that cannot backtrack, and rejects lookaround and backreferences.
+ */
+export interface TagCriteria {
+  readonly pattern?: string;
+  readonly semver?: string;
+  readonly regex?: string;
+  readonly includePrerelease?: boolean;
+}
+
 /** Which tags a cleanup rule governs, and how many of them it keeps. */
 export interface CleanupRule {
   /** A glob over repository names within the project. `*` for all of them. */
   readonly repositories: string;
-  readonly tags: {
-    readonly pattern?: string;
-    readonly semver?: string;
-    readonly includePrerelease?: boolean;
-  };
+  readonly tags: TagCriteria;
   readonly keepLast: number | null;
   readonly keepWithinDays: number | null;
+  /** How "newest" is decided when keeping the last `keepLast`. Defaults to update time. */
   readonly keepBy?: "updated" | "semver";
 }
 
@@ -286,6 +297,7 @@ export interface ReplicationRuleSummary {
   readonly tagFilter: {
     readonly pattern?: string | undefined;
     readonly semver?: string | undefined;
+    readonly regex?: string | undefined;
     readonly includePrerelease?: boolean | undefined;
   };
   readonly trigger: ReplicationTrigger;

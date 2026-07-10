@@ -17,6 +17,7 @@ import {
 } from "@registry/notifications";
 import { isValidRepositoryName } from "@registry/oci";
 import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/projects";
+import { RegexSyntaxError, compileRegex } from "@registry/regex";
 import type { Direction, Trigger } from "@registry/replication";
 import { parseRange, type TagFilter } from "@registry/semver";
 import type { Identity, Principal } from "../auth/principal.js";
@@ -165,6 +166,24 @@ function validRemoteUrl(raw: unknown): string {
   return url.origin;
 }
 
+/**
+ * Why the pattern will not compile, or null.
+ *
+ * A regular expression is refused at the moment an operator types it rather
+ * than ignored by the evaluator hours later. The engine's message names the
+ * offset, and the reason - `a**`, a backreference, lookaround - is the reason
+ * a backtracking engine would have been unsafe.
+ */
+function regexError(source: string): string | null {
+  if (source === "") return null;
+  try {
+    compileRegex(source);
+    return null;
+  } catch (error) {
+    return error instanceof RegexSyntaxError ? error.message : "it will not compile";
+  }
+}
+
 function validTagFilter(raw: unknown): TagFilter {
   if (raw === undefined || raw === null) return {};
   if (typeof raw !== "object") throw badRequest("tagFilter must be an object");
@@ -179,6 +198,11 @@ function validTagFilter(raw: unknown): TagFilter {
       throw badRequest(`"${filter.semver}" is not a valid semver range`);
     }
   }
+  if (filter.regex !== undefined) {
+    if (typeof filter.regex !== "string") throw badRequest("tagFilter.regex must be a string");
+    const problem = regexError(filter.regex);
+    if (problem !== null) throw badRequest(`tagFilter.regex is not a valid regular expression: ${problem}`);
+  }
   if (filter.includePrerelease !== undefined && typeof filter.includePrerelease !== "boolean") {
     throw badRequest("tagFilter.includePrerelease must be a boolean");
   }
@@ -186,6 +210,7 @@ function validTagFilter(raw: unknown): TagFilter {
   return {
     ...(filter.pattern === undefined ? {} : { pattern: filter.pattern as string }),
     ...(filter.semver === undefined ? {} : { semver: filter.semver as string }),
+    ...(filter.regex === undefined ? {} : { regex: filter.regex as string }),
     ...(filter.includePrerelease === undefined
       ? {}
       : { includePrerelease: filter.includePrerelease as boolean }),
@@ -428,6 +453,13 @@ function validateRule(raw: unknown, index: number): CleanupRule {
     if (semver !== "" && parseRange(semver) === null) return fail(`"${semver}" is not a valid semver range`);
   }
 
+  const regex = tags.regex;
+  if (regex !== undefined) {
+    if (typeof regex !== "string") return fail("tags.regex must be a string");
+    const problem = regexError(regex);
+    if (problem !== null) return fail(`tags.regex is not a valid regular expression: ${problem}`);
+  }
+
   const includePrerelease = tags.includePrerelease;
   if (includePrerelease !== undefined && typeof includePrerelease !== "boolean") {
     return fail("tags.includePrerelease must be a boolean");
@@ -446,6 +478,7 @@ function validateRule(raw: unknown, index: number): CleanupRule {
     tags: {
       ...(pattern === undefined ? {} : { pattern }),
       ...(semver === undefined ? {} : { semver }),
+      ...(regex === undefined ? {} : { regex }),
       ...(includePrerelease === undefined ? {} : { includePrerelease }),
     },
     keepLast,

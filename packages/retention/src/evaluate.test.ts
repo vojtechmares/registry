@@ -122,4 +122,23 @@ describe("evaluateCleanup: guards against deleting everything", () => {
     const rules = [rule({ tags: { semver: "garbage" } })];
     expect(evaluate("acme/api", [tag("1.0.0"), tag("latest")], rules)).toEqual([]);
   });
+
+  it("selects tags by regular expression", () => {
+    const rules = [rule({ tags: { regex: "^nightly-\\d{8}$" } })];
+    const tags = [tag("nightly-20260710"), tag("nightly-latest"), tag("v1.0.0")];
+    expect(evaluate("acme/api", tags, rules)).toEqual(["nightly-20260710"]);
+  });
+
+  it("ignores a rule with an uncompilable regex rather than governing every tag", () => {
+    const rules = [rule({ tags: { regex: "(unclosed" } })];
+    expect(evaluate("acme/api", [tag("1.0.0"), tag("latest")], rules)).toEqual([]);
+  });
+
+  it("keeps by semver while governing by regex", () => {
+    // "let the user choose how the cleanup runs": pick the tags with one
+    // vocabulary, rank them with another.
+    const rules = [rule({ tags: { regex: "^v" }, keepLast: 2, keepBy: "semver" })];
+    const tags = [tag("v1.9.0"), tag("v1.10.0"), tag("v1.2.0"), tag("latest")];
+    expect(evaluate("acme/api", tags, rules)).toEqual(["v1.2.0"]);
+  });
 });

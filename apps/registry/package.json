@@ -20,6 +20,7 @@
     "@registry/oci": "workspace:*",
     "@registry/oidc": "workspace:*",
     "@registry/projects": "workspace:*",
+    "@registry/regex": "workspace:*",
     "@registry/registry-core": "workspace:*",
     "@registry/replication": "workspace:*",
     "@registry/retention": "workspace:*",

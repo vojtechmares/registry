@@ -1,3 +1,4 @@
+import { isValidRegex } from "@registry/regex";
 import {
   type TagFilter,
   compareVersions,
@@ -58,15 +59,19 @@ function globMatches(pattern: string, value: string): boolean {
 }
 
 /**
- * A rule with a range that will not parse governs nothing.
+ * A rule with a filter that will not parse governs nothing.
  *
  * The alternative is that a typo in `^1.2.3` widens the rule to every tag in
  * the repository, and the next scheduled run deletes them.
  */
 function ruleIsSound(rule: CleanupRule): boolean {
   if (rule.repositories === "") return false;
+
   const range = rule.tags.semver;
-  return range === undefined || range === "" || parseRange(range) !== null;
+  if (range !== undefined && range !== "" && parseRange(range) === null) return false;
+
+  const regex = rule.tags.regex;
+  return regex === undefined || regex === "" || isValidRegex(regex);
 }
 
 /** Newest first, by whichever order the rule asked for. */

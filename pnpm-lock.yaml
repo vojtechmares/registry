@@ -41,6 +41,9 @@ importers:
       '@registry/projects':
         specifier: workspace:*
         version: link:../../packages/projects
+      '@registry/regex':
+        specifier: workspace:*
+        version: link:../../packages/regex
       '@registry/registry-core':
         specifier: workspace:*
         version: link:../../packages/registry-core
@@ -201,6 +204,15 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
 
+  packages/regex:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
+
   packages/registry-core:
     dependencies:
       '@registry/oci':
@@ -232,6 +244,9 @@ importers:
 
   packages/retention:
     dependencies:
+      '@registry/regex':
+        specifier: workspace:*
+        version: link:../regex
       '@registry/semver':
         specifier: workspace:*
         version: link:../semver
@@ -244,6 +259,10 @@ importers:
         version: 3.2.6(@types/node@24.13.2)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)
 
   packages/semver:
+    dependencies:
+      '@registry/regex':
+        specifier: workspace:*
+        version: link:../regex
     devDependencies:
       typescript:
         specifier: ^5.9.3

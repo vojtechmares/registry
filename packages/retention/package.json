@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@registry/regex": "workspace:*",
     "@registry/semver": "workspace:*"
   },
   "devDependencies": {

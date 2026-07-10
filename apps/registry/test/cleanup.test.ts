@@ -289,6 +289,55 @@ describe("the cleanup policy API", () => {
     expect(body.message).toContain("semver");
   });
 
+  it("refuses a rule whose regex will not compile, naming the offset", async () => {
+    await seedProject({ name: "api-clean-re" });
+    const response = await call("PUT", "/api/v1/projects/api-clean-re/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        rules: [{ repositories: "*", tags: { regex: "(unclosed" }, keepLast: 1, keepWithinDays: null }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain("tags.regex");
+    expect(body.message).toContain("offset");
+  });
+
+  it("refuses a rule whose regex a backtracking engine could not run safely", async () => {
+    await seedProject({ name: "api-clean-bomb" });
+    const response = await call("PUT", "/api/v1/projects/api-clean-bomb/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        // Lookahead cannot be simulated without backtracking, so it never reaches the cron.
+        rules: [{ repositories: "*", tags: { regex: "^(?=v)" }, keepLast: 1, keepWithinDays: null }],
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("accepts and stores a rule that selects by regex", async () => {
+    await seedProject({ name: "api-clean-re2" });
+    const nightly = {
+      repositories: "*",
+      tags: { regex: "^nightly-\\d{8}$" },
+      keepLast: 3,
+      keepWithinDays: null,
+      keepBy: "updated",
+    };
+    const response = await call("PUT", "/api/v1/projects/api-clean-re2/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, schedule: "0 3 * * *", rules: [nightly] }),
+    });
+    expect(response.status).toBe(200);
+
+    const stored = (await response.json()) as { rules: CleanupRule[] };
+    expect(stored.rules[0]?.tags.regex).toBe("^nightly-\\d{8}$");
+  });
+
   it("refuses a rule with an empty repository glob", async () => {
     await seedProject({ name: "api-clean3" });
     const response = await call("PUT", "/api/v1/projects/api-clean3/cleanup", {
