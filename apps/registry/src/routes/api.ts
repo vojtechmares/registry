@@ -32,6 +32,7 @@ import { ReplicationStore } from "../replication/store.js";
 import { TaskQueue } from "../tasks/queue.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
+import { TagIndex } from "../storage/tags.js";
 import { StatsStore } from "../storage/stats.js";
 import { handleProjects, requireProjectOwner, tokenProjectPin, viewerOf, windowDays } from "./projects.js";
 import {
@@ -96,6 +97,7 @@ export async function handleApiRequest(
   const admin = new AdminStore(env.DB);
   const audit = new AuditStore(env.DB);
   const projects = new ProjectStore(env.DB);
+  const tags = new TagIndex(env.DB);
   const usage = new StatsStore(env.DB);
   const cleanup = new CleanupStore(env.DB);
   const notifications = new NotificationStore(env.DB);
@@ -120,6 +122,7 @@ export async function handleApiRequest(
       admin,
       audit,
       projects,
+      tags,
       stats: usage,
       cleanup,
       notifications,
@@ -149,6 +152,7 @@ interface Context {
   admin: AdminStore;
   audit: AuditStore;
   projects: ProjectStore;
+  tags: TagIndex;
   stats: StatsStore;
   cleanup: CleanupStore;
   notifications: NotificationStore;
@@ -361,6 +365,28 @@ function validName(name: string): string {
   return name;
 }
 
+/**
+ * A repository holding immutable tags cannot be deleted out from under them.
+ *
+ * Deleting the repository and pushing it back is otherwise a way to move an
+ * immutable tag - and this route authorizes with `delete` on the data plane, so
+ * a machine token can reach it while never being able to turn immutability off,
+ * which is the control plane. An empty repository has nothing to protect.
+ *
+ * A project owner who really means it turns the setting off first, which is a
+ * control-plane change, and audited.
+ */
+async function refuseIfTagsAreImmutable(ctx: Context, name: string): Promise<void> {
+  const project = projectOf(name);
+  const rules = await ctx.projects.rules(project);
+  if (rules?.immutableTags !== true) return;
+  if (!(await ctx.tags.hasAnyTag(name))) return;
+
+  throw forbidden(
+    `"${project}" enforces immutable tags: "${name}" still holds tags, so it cannot be deleted`,
+  );
+}
+
 async function repository(ctx: Context, rawName: string): Promise<Response> {
   const name = validName(rawName);
   const authorize = authorizeFor(ctx);
@@ -374,6 +400,7 @@ async function repository(ctx: Context, rawName: string): Promise<Response> {
 
   if (ctx.request.method === "DELETE") {
     await authorize(name, "delete");
+    await refuseIfTagsAreImmutable(ctx, name);
     if (!(await ctx.admin.deleteRepository(name))) throw notFound();
 
     await ctx.audit.record({

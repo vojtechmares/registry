@@ -39,7 +39,9 @@ suite is the only thing that needs real infrastructure.
   cannot be used to amplify load.
 - Lifecycle management and refcounted garbage collection on a nightly cron.
 - Per-project immutable tags: a tag names one digest, and neither a push, a
-  delete, nor a cleanup rule may change that.
+  delete of the tag, a delete of the manifest or repository under it, nor a
+  cleanup rule may change that. Turning the promise off is a control-plane
+  change, which a machine token can never make.
 - An audit log of every change to a project, a repository, an artifact, a user
   or a token, naming the user and the credential that made it. Pulls are counted
   rather than audited.
@@ -133,6 +135,16 @@ leak access:
   untagged, so the grace period is not a grace period for old images. This
   matches the pre-existing nightly lifecycle job; both would need an
   "untagged-since" timestamp to honour the window.
+- **Deleting a project deletes its immutable tags.** Repository deletion is
+  refused while the project enforces immutability, because that route authorizes
+  on the data plane and a machine token can reach it. Project deletion is
+  owner-only and destroys the setting along with everything it protected, which
+  is the same thing an owner could do by turning the setting off first. Both are
+  audited.
+- **A user can learn whether an email address is registered.** `PATCH
+/api/v1/users/<id>` answers 409 for an address somebody else holds, so an
+  authenticated non-administrator can probe for one. Answering 200 without
+  saving would be worse.
 - **An audit row is written after the change, not with it.** D1 gives a request
   no transaction across statements, so a Worker that dies between the change and
   its audit row leaves a change nobody is recorded as making. Threading the row

@@ -31,4 +31,18 @@ export class TagIndex {
       .first();
     return row !== null;
   }
+
+  /**
+   * Whether the repository holds any tag at all.
+   *
+   * Deleting a repository takes its tags with it, so an immutable project must
+   * refuse that too. An empty repository has nothing to protect.
+   */
+  async hasAnyTag(repository: string): Promise<boolean> {
+    const row = await this.db
+      .prepare("SELECT 1 FROM tags WHERE repository = ? LIMIT 1")
+      .bind(repository)
+      .first();
+    return row !== null;
+  }
 }

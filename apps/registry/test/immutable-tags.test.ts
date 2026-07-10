@@ -249,6 +249,42 @@ describe("scheduled cleanup", () => {
   });
 });
 
+describe("deleting the repository out from under the tags", () => {
+  /**
+   * Deleting a repository and pushing it back is otherwise a way to move an
+   * immutable tag - and a machine token can do it, while never being able to
+   * turn immutability off, because that is the control plane.
+   */
+  it("refuses to delete a repository whose project enforces immutable tags", async () => {
+    await seedRepository("immrepo/app", { name: "immrepo", immutableTags: true });
+    await putManifest("immrepo/app", "v1.0.0", await buildManifest("immrepo/app", "one"));
+
+    const response = await call("DELETE", "/api/v1/repositories/immrepo/app", {
+      headers: { Authorization: auth },
+    });
+    expect(response.status).toBe(403);
+    expect(await tagDigest("immrepo/app", "v1.0.0")).not.toBeNull();
+  });
+
+  it("still deletes a repository that holds no tags", async () => {
+    await seedRepository("immrepo2/empty", { name: "immrepo2", immutableTags: true });
+    const response = await call("DELETE", "/api/v1/repositories/immrepo2/empty", {
+      headers: { Authorization: auth },
+    });
+    expect(response.status).toBe(204);
+  });
+
+  it("deletes a repository freely when the project does not enforce it", async () => {
+    await seedRepository("mutrepo/app", { name: "mutrepo" });
+    await putManifest("mutrepo/app", "v1.0.0", await buildManifest("mutrepo/app", "one"));
+
+    const response = await call("DELETE", "/api/v1/repositories/mutrepo/app", {
+      headers: { Authorization: auth },
+    });
+    expect(response.status).toBe(204);
+  });
+});
+
 describe("the storage backstop", () => {
   /**
    * The policy hook reads the tag and the store then writes it. Two pushes of
