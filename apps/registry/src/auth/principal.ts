@@ -177,14 +177,18 @@ async function authenticateBearer(
   // halves of it. Dropping the project here would let a token scoped to one
   // project trade itself, at `/v2/token`, for a bearer token that reaches every
   // project its owner can.
-  const confined = claims as { scopes?: Scope[]; project?: string | null };
+  const confined = claims as { scopes?: Scope[]; project?: string | null; tokenId?: string };
   if (confined.scopes !== undefined) {
     // A bearer minted from an unpinned access token before pinning was required.
     // Its parent no longer authenticates, and neither may it.
     const project = confined.project ?? null;
     if (project === null) throw unauthorized(UNPINNED_TOKEN);
 
-    return { kind: "token", tokenId: claims.jti, identity, scopes: confined.scopes, project };
+    // The access token this bearer stands for, not the bearer's own `jti`, which
+    // is fresh every five minutes and names nothing that can be revoked. A
+    // bearer minted before this claim existed falls back to it and expires soon.
+    const tokenId = confined.tokenId ?? claims.jti;
+    return { kind: "token", tokenId, identity, scopes: confined.scopes, project };
   }
 
   // Session tokens for the bootstrap admin never touch the database.

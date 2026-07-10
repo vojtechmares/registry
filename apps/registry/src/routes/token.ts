@@ -113,7 +113,9 @@ async function issueFor(
     principal.identity,
     granted,
     false,
-    principal.kind === "token" ? { scopes: principal.scopes, project: principal.project } : undefined,
+    principal.kind === "token"
+      ? { scopes: principal.scopes, project: principal.project, tokenId: principal.tokenId }
+      : undefined,
   );
 }
 
@@ -162,6 +164,14 @@ function scopeString(scopes: readonly Scope[]): string {
 interface Confinement {
   readonly scopes: readonly Scope[];
   readonly project: string | null;
+  /**
+   * The access token this bearer was minted from.
+   *
+   * `jti` is a fresh identifier for the bearer itself, and lives five minutes.
+   * The audit log wants the durable credential - the one that can be revoked -
+   * so the bearer carries it. Signed, so a client cannot claim another's.
+   */
+  readonly tokenId: string;
 }
 
 async function issue(
@@ -186,7 +196,9 @@ async function issue(
     nbf: issuedAt,
     exp: issuedAt + config.tokenTtlSeconds,
     jti: crypto.randomUUID(),
-    ...(confinement === undefined ? {} : { scopes: confinement.scopes, project: confinement.project }),
+    ...(confinement === undefined
+      ? {}
+      : { scopes: confinement.scopes, project: confinement.project, tokenId: confinement.tokenId }),
   };
 
   const token = await signJwt(claims as RegistryClaims, config.jwtSecret);

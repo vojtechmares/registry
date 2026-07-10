@@ -139,6 +139,46 @@ describe("artifacts", () => {
     expect(event?.actorName).toBe(ALICE.username);
     expect(event?.actorTokenId).toBe(id);
   });
+
+  it("names the same credential when the push goes through the bearer flow", async () => {
+    // What `docker push` actually does: exchange the token for a bearer at
+    // /v2/token, then push with that. The bearer's own `jti` is fresh every five
+    // minutes and names nothing that can be revoked, so it must not be recorded.
+    const created = await call("POST", "/api/v1/projects/auacme/tokens", {
+      headers: { ...json, Authorization: aliceAuth },
+      body: JSON.stringify({ name: "ci-bearer", scopes: [{ repository: "*", actions: ["pull", "push"] }] }),
+    });
+    const { id, secret } = (await created.json()) as { id: string; secret: string };
+
+    const exchanged = await call("GET", "/v2/token?scope=repository:auacme/api:push,pull&service=registry", {
+      headers: { Authorization: basic("x", secret) },
+    });
+    expect(exchanged.status).toBe(200);
+    const { token } = (await exchanged.json()) as { token: string };
+    const bearer = { Authorization: `Bearer ${token}` };
+
+    const config = new TextEncoder().encode('{"marker":"bearer"}');
+    const configDigest = await digestOf(config);
+    await call("POST", `/v2/auacme/api/blobs/uploads/?digest=${configDigest}`, {
+      headers: { ...bearer, "Content-Length": String(config.length) },
+      body: config as unknown as BodyInit,
+    });
+    const pushed = await call("PUT", "/v2/auacme/api/manifests/via-bearer", {
+      headers: { ...bearer, "Content-Type": MANIFEST_TYPE },
+      body: JSON.stringify({
+        schemaVersion: 2,
+        mediaType: MANIFEST_TYPE,
+        config: { mediaType: CONFIG_TYPE, digest: configDigest, size: config.length },
+        layers: [],
+      }),
+    });
+    expect(pushed.status).toBe(201);
+    await settle();
+
+    const [event] = await rows({ action: "artifact.push" });
+    expect(event?.actorKind).toBe("token");
+    expect(event?.actorTokenId).toBe(id);
+  });
 });
 
 describe("the control plane", () => {

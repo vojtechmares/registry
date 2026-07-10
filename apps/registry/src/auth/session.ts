@@ -92,11 +92,13 @@ export async function verifySessionCookie(token: string, config: RegistryConfig)
   });
   if (claims === null || claims.sub === "anonymous") return null;
 
-  // Belt to the audience's braces: a registry access token carries a `scopes`
-  // or `project` claim, and one must never be honoured as a session however it
-  // arrived. A genuine session cookie has neither.
-  const confined = claims as { scopes?: unknown; project?: unknown };
-  if (confined.scopes !== undefined || confined.project !== undefined) return null;
+  // Belt to the audience's braces: a registry access token carries `scopes`,
+  // `project` and `tokenId` claims, and one must never be honoured as a session
+  // however it arrived. A genuine session cookie carries none of them.
+  const confined = claims as { scopes?: unknown; project?: unknown; tokenId?: unknown };
+  if (confined.scopes !== undefined || confined.project !== undefined || confined.tokenId !== undefined) {
+    return null;
+  }
 
   return { id: claims.sub, username: claims.name, isAdmin: claims.admin };
 }
