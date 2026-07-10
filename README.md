@@ -40,6 +40,9 @@ suite is the only thing that needs real infrastructure.
 - Lifecycle management and refcounted garbage collection on a nightly cron.
 - Per-project immutable tags: a tag names one digest, and neither a push, a
   delete, nor a cleanup rule may change that.
+- An audit log of every change to a project, a repository, an artifact, a user
+  or a token, naming the user and the credential that made it. Pulls are counted
+  rather than audited.
 - Cleanup rules that select tags by glob, semver range, or regular expression,
   matched by an engine that cannot backtrack.
 - Admin dashboard and public registry UI.
@@ -101,6 +104,7 @@ Worker behaviour is set through `vars` in `wrangler.jsonc`:
 | `RATE_LIMIT_IP_RPM`            | `1200`  | Per-source-address request budget.                                                   |
 | `RATE_LIMIT_USER_RPM`          | `3000`  | Per-principal request budget.                                                        |
 | `UNTAGGED_MANIFEST_TTL_DAYS`   | `0`     | Retire untagged manifests older than this (0 disables).                              |
+| `AUDIT_RETENTION_DAYS`         | `365`   | Days an audit event is kept (0 keeps everything).                                    |
 
 Secrets (`JWT_SECRET`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD_HASH`)
 are set with `wrangler secret put`.
@@ -129,6 +133,14 @@ leak access:
   untagged, so the grace period is not a grace period for old images. This
   matches the pre-existing nightly lifecycle job; both would need an
   "untagged-since" timestamp to honour the window.
+- **An audit row is written after the change, not with it.** D1 gives a request
+  no transaction across statements, so a Worker that dies between the change and
+  its audit row leaves a change nobody is recorded as making. Threading the row
+  through every store method so the two share a `batch()` would buy the
+  atomicity at the price of every store method knowing about auditing.
+- **Replication does not write audit rows.** A rule that copies an artifact in
+  goes through `LocalRegistry`, which bypasses the event collector. The copy is
+  recorded in `replication_executions` instead, without an actor.
 - **An immutable tag can still be lost to a concurrent delete.** The push path
   restates its check in the `tagManifest` upsert, so two simultaneous pushes
   cannot silently overwrite each other. The delete path has no such backstop:

@@ -20,6 +20,7 @@ import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/
 import { RegexSyntaxError, compileRegex } from "@registry/regex";
 import type { Direction, Trigger } from "@registry/replication";
 import { parseRange, type TagFilter } from "@registry/semver";
+import { type AuditEntry, AuditStore, actorOf } from "../audit/store.js";
 import type { Identity, Principal } from "../auth/principal.js";
 import type { AuthStore } from "../auth/store.js";
 import type { AdminStore, Viewer } from "../storage/admin.js";
@@ -46,6 +47,7 @@ export interface ProjectContext {
   readonly principal: Principal;
   readonly projects: ProjectStore;
   readonly admin: AdminStore;
+  readonly audit: AuditStore;
   readonly auth: AuthStore;
   readonly stats: StatsStore;
   readonly cleanup: CleanupStore;
@@ -84,6 +86,31 @@ export function tokenProjectPin(principal: Principal): string | null {
 function validName(name: string): string {
   if (!isValidProjectName(name)) throw badRequest(`"${name}" is not a valid project name`);
   return name;
+}
+
+/**
+ * Records a change to a project, or to something inside it.
+ *
+ * After the change, never before: an audit log records what happened, and a
+ * refusal did not happen. A Worker that dies in between leaves a change nobody
+ * is recorded as making, which D1 cannot prevent without a transaction the
+ * request does not have.
+ */
+async function auditProject(
+  ctx: ProjectContext,
+  project: string,
+  action: string,
+  detail?: Record<string, unknown>,
+): Promise<void> {
+  const entry: AuditEntry = {
+    actor: actorOf(ctx.principal),
+    action,
+    resourceType: "project",
+    resource: project,
+    project,
+    ...(detail === undefined ? {} : { detail }),
+  };
+  await ctx.audit.record(entry);
 }
 
 /**
@@ -300,6 +327,11 @@ async function replicationRules(ctx: ProjectContext, name: string): Promise<Resp
     schedule,
   });
 
+  await auditProject(ctx, name, "replication.create", {
+    id: rule.id,
+    direction: rule.direction,
+    remoteUrl: rule.remoteUrl,
+  });
   return Response.json(rule, { status: 201 });
 }
 
@@ -309,6 +341,7 @@ async function replicationRule(ctx: ProjectContext, name: string, id: string): P
 
   if (ctx.request.method === "DELETE") {
     if (!(await ctx.replication.remove(name, id))) throw notFound("no such replication rule");
+    await auditProject(ctx, name, "replication.delete", { id });
     return new Response(null, { status: 204 });
   }
 
@@ -392,6 +425,11 @@ async function notificationPolicies(ctx: ProjectContext, name: string): Promise<
     eventTypes,
   });
 
+  await auditProject(ctx, name, "notification.create", {
+    id: policy.id,
+    targetType: policy.targetType,
+    target: policy.target,
+  });
   return Response.json({ ...policy, secret }, { status: 201 });
 }
 
@@ -399,6 +437,7 @@ async function removeNotification(ctx: ProjectContext, name: string, id: string)
   if (ctx.request.method !== "DELETE") throw notFound();
   await requireProjectOwner(ctx, name);
   if (!(await ctx.notifications.remove(name, id))) throw notFound("no such notification policy");
+  await auditProject(ctx, name, "notification.delete", { id });
   return new Response(null, { status: 204 });
 }
 
@@ -527,7 +566,13 @@ async function cleanupPolicy(ctx: ProjectContext, name: string): Promise<Respons
     untaggedOlderThanDays: nonNegative(body.untaggedOlderThanDays, "untaggedOlderThanDays"),
   };
 
-  return Response.json(await ctx.cleanup.put(name, input));
+  const policy = await ctx.cleanup.put(name, input);
+  await auditProject(ctx, name, "cleanup.update", {
+    enabled: input.enabled,
+    schedule: input.schedule,
+    rules: input.rules.length,
+  });
+  return Response.json(policy);
 }
 
 /** What maintenance removed, so a surprising deletion can be explained after the fact. */
@@ -601,6 +646,7 @@ async function createProject(ctx: ProjectContext): Promise<Response> {
   if (!created) throw conflict(`project "${name}" already exists`);
 
   const detail = await ctx.projects.get(name, identity.id);
+  await auditProject(ctx, name, "project.create", { visibility: detail?.visibility ?? null });
   return Response.json(detail, { status: 201 });
 }
 
@@ -669,12 +715,17 @@ async function updateProject(ctx: ProjectContext, name: string): Promise<Respons
   }
 
   if (!(await ctx.projects.update(name, settings))) throw notFound(`project "${name}" does not exist`);
+
+  // The settings that were applied, so the row answers "who raised the quota"
+  // rather than merely "who touched the project".
+  await auditProject(ctx, name, "project.update", { ...settings });
   return Response.json(await ctx.projects.get(name, identity.id));
 }
 
 async function deleteProject(ctx: ProjectContext, name: string): Promise<Response> {
   await requireProjectOwner(ctx, name);
   if (!(await ctx.projects.remove(name))) throw notFound(`project "${name}" does not exist`);
+  await auditProject(ctx, name, "project.delete");
   return new Response(null, { status: 204 });
 }
 
@@ -729,6 +780,7 @@ async function addMember(ctx: ProjectContext, name: string): Promise<Response> {
   }
 
   await ctx.projects.setMember(name, user.id, body.role);
+  await auditProject(ctx, name, "member.add", { username: user.username, role: body.role });
   return Response.json(
     { project: name, userId: user.id, username: user.username, role: body.role },
     { status: 201 },
@@ -744,6 +796,7 @@ async function member(ctx: ProjectContext, name: string, userId: string): Promis
   if (ctx.request.method === "DELETE") {
     if (await lastOwner(ctx, name, userId)) throw badRequest("a project must keep at least one owner");
     if (!(await ctx.projects.removeMember(name, userId))) throw notFound("no such member");
+    await auditProject(ctx, name, "member.remove", { userId });
     return new Response(null, { status: 204 });
   }
 
@@ -760,6 +813,7 @@ async function member(ctx: ProjectContext, name: string, userId: string): Promis
   }
 
   await ctx.projects.setMember(name, userId, body.role);
+  await auditProject(ctx, name, "member.update", { userId, role: body.role });
   return Response.json({ project: name, userId, role: body.role });
 }
 

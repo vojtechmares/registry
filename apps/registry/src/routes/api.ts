@@ -1,6 +1,7 @@
 import { OciError, isValidDigest, isValidRepositoryName } from "@registry/oci";
 import { isValidProjectName, projectOf } from "@registry/projects";
 import type { Action, Authorize } from "@registry/registry-core";
+import { AuditStore, actorOf } from "../audit/store.js";
 import { createAuthorize } from "../auth/authorize.js";
 import type { RegistryConfig } from "../auth/config.js";
 import { formatAccessToken, generateTokenSecret, hashPassword, hashTokenSecret } from "../auth/password.js";
@@ -48,7 +49,7 @@ import {
   requireJsonBody,
   requireUser,
 } from "./support.js";
-import type { CreatedAccessToken, LifecyclePolicy } from "@registry/api-contract";
+import type { AuditResourceType, CreatedAccessToken, LifecyclePolicy } from "@registry/api-contract";
 
 const PREFIX = "/api/v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -93,6 +94,7 @@ export async function handleApiRequest(
 
   const auth = new AuthStore(env.DB);
   const admin = new AdminStore(env.DB);
+  const audit = new AuditStore(env.DB);
   const projects = new ProjectStore(env.DB);
   const usage = new StatsStore(env.DB);
   const cleanup = new CleanupStore(env.DB);
@@ -116,6 +118,7 @@ export async function handleApiRequest(
       principal,
       auth,
       admin,
+      audit,
       projects,
       stats: usage,
       cleanup,
@@ -144,6 +147,7 @@ interface Context {
   principal: Principal;
   auth: AuthStore;
   admin: AdminStore;
+  audit: AuditStore;
   projects: ProjectStore;
   stats: StatsStore;
   cleanup: CleanupStore;
@@ -165,6 +169,7 @@ async function dispatch(ctx: Context): Promise<Response> {
   if (path === "/auth/oidc/start") return oidcStart(ctx);
   if (path === "/auth/oidc/callback") return oidcCallback(ctx);
   if (path === "/stats") return stats(ctx);
+  if (path === "/audit") return auditLog(ctx);
   if (path === "/repositories") return listRepositories(ctx);
   if (path === "/tokens") return request.method === "GET" ? listTokens(ctx) : createToken(ctx);
   if (path.startsWith("/tokens/")) return revokeToken(ctx, path.slice("/tokens/".length));
@@ -370,6 +375,15 @@ async function repository(ctx: Context, rawName: string): Promise<Response> {
   if (ctx.request.method === "DELETE") {
     await authorize(name, "delete");
     if (!(await ctx.admin.deleteRepository(name))) throw notFound();
+
+    await ctx.audit.record({
+      actor: actorOf(ctx.principal),
+      action: "repository.delete",
+      resourceType: "repository",
+      resource: name,
+      project: projectOf(name),
+    });
+
     return new Response(null, { status: 204 });
   }
 
@@ -457,6 +471,15 @@ async function projectTokens(ctx: Context, project: string, tokenId: string | un
     if (ctx.request.method !== "DELETE") throw notFound();
     await requireProjectOwner(ctx, project);
     if (!(await ctx.admin.revokeProjectToken(project, tokenId))) throw notFound();
+
+    await ctx.audit.record({
+      actor: actorOf(ctx.principal),
+      action: "token.revoke",
+      resourceType: "token",
+      resource: tokenId,
+      project,
+    });
+
     return new Response(null, { status: 204 });
   }
 
@@ -562,6 +585,15 @@ async function mintToken(ctx: Context, pinned: string | null): Promise<Response>
     expiresAt,
   });
 
+  await ctx.audit.record({
+    actor: actorOf(ctx.principal),
+    action: "token.create",
+    resourceType: "token",
+    resource: id,
+    project,
+    detail: { name: summary.name, scopes: summary.scopes, expiresAt },
+  });
+
   // The only time the secret is ever visible.
   const created: CreatedAccessToken = { ...summary, secret: formatAccessToken(id, secret) };
   return Response.json(created, { status: 201 });
@@ -583,7 +615,62 @@ async function revokeToken(ctx: Context, id: string): Promise<Response> {
   if (ctx.request.method !== "DELETE") throw notFound();
   const identity = requireUser(ctx.principal);
   if (!(await ctx.admin.revokeToken(identity.id, id))) throw notFound();
+
+  await ctx.audit.record({
+    actor: actorOf(ctx.principal),
+    action: "token.revoke",
+    resourceType: "token",
+    resource: id,
+  });
+
   return new Response(null, { status: 204 });
+}
+
+const AUDIT_RESOURCE_TYPES = new Set<AuditResourceType>([
+  "project",
+  "repository",
+  "artifact",
+  "user",
+  "token",
+]);
+
+function auditResourceType(raw: string | null): AuditResourceType | undefined {
+  if (raw === null || raw === "") return undefined;
+  if (!AUDIT_RESOURCE_TYPES.has(raw as AuditResourceType)) {
+    throw badRequest(`"${raw}" is not an audited resource type`);
+  }
+  return raw as AuditResourceType;
+}
+
+function auditFilter(url: URL, name: string): string | undefined {
+  const value = url.searchParams.get(name);
+  return value === null || value === "" ? undefined : value;
+}
+
+/**
+ * `GET /audit` - who changed what.
+ *
+ * Administrators only. The log spans every project, and a project owner who
+ * could read it would learn the names of repositories in projects they cannot
+ * see. Scoping a per-project view is a larger change than the audit itself.
+ */
+async function auditLog(ctx: Context): Promise<Response> {
+  if (ctx.request.method !== "GET") throw notFound();
+  requireAdmin(ctx.principal);
+
+  const raw = Number(ctx.url.searchParams.get("limit") ?? "50");
+  const limit = Number.isSafeInteger(raw) && raw >= 1 ? Math.min(raw, 200) : 50;
+
+  const page = await ctx.audit.list({
+    resourceType: auditResourceType(ctx.url.searchParams.get("resourceType")),
+    project: auditFilter(ctx.url, "project"),
+    actor: auditFilter(ctx.url, "actor"),
+    action: auditFilter(ctx.url, "action"),
+    cursor: auditFilter(ctx.url, "cursor"),
+    limit,
+  });
+
+  return Response.json(page);
 }
 
 async function listUsers(ctx: Context): Promise<Response> {
@@ -619,6 +706,14 @@ async function createUser(ctx: Context): Promise<Response> {
     isAdmin: body.isAdmin === true,
   });
 
+  await ctx.audit.record({
+    actor: actorOf(ctx.principal),
+    action: "user.create",
+    resourceType: "user",
+    resource: user.id,
+    detail: { username: user.username, email: user.email, isAdmin: user.isAdmin },
+  });
+
   return Response.json(user, { status: 201 });
 }
 
@@ -648,7 +743,20 @@ async function userRoute(ctx: Context, id: string): Promise<Response> {
   const identity = requireAdmin(ctx.principal);
   if (identity.id === id) throw badRequest("you cannot delete your own account");
   if (id === "bootstrap") throw badRequest("the bootstrap administrator cannot be deleted");
+
+  // Read before the delete, so the row can name whom it was. There is no
+  // foreign key from `audit_events` to `users`, precisely so this survives.
+  const doomed = await ctx.auth.findUserById(id);
   if (!(await ctx.admin.deleteUser(id))) throw notFound();
+
+  await ctx.audit.record({
+    actor: actorOf(ctx.principal),
+    action: "user.delete",
+    resourceType: "user",
+    resource: id,
+    detail: { username: doomed?.username ?? null },
+  });
+
   return new Response(null, { status: 204 });
 }
 
@@ -665,6 +773,15 @@ async function updateUser(ctx: Context, id: string): Promise<Response> {
   const email = await requireFreeEmail(ctx, body.email, id);
   const user = await ctx.admin.setUserEmail(id, email);
   if (user === null) throw notFound(`user "${id}" does not exist`);
+
+  await ctx.audit.record({
+    actor: actorOf(ctx.principal),
+    action: "user.update",
+    resourceType: "user",
+    resource: id,
+    detail: { username: user.username, email },
+  });
+
   return Response.json(user);
 }
 

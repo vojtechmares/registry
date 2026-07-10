@@ -177,6 +177,44 @@ export interface ApiErrorBody {
   readonly message: string;
 }
 
+/** The kinds of thing an audit event can be about. */
+export type AuditResourceType = "project" | "repository" | "artifact" | "user" | "token";
+
+/** `user` acted directly, `token` through a machine credential, `system` is a cron. */
+export type AuditActorKind = "user" | "token" | "system" | "anonymous";
+
+/**
+ * One change, and who made it.
+ *
+ * Pulls are not recorded: one `docker pull` reaches the manifest endpoint many
+ * times, and `UsageStats` already counts them. Pushes and deletes are.
+ */
+export interface AuditEvent {
+  readonly id: string;
+  /** Null when the actor was anonymous or a cron. */
+  readonly actorId: string | null;
+  /** The username as it was, so the row still reads once the account is deleted. */
+  readonly actorName: string;
+  readonly actorKind: AuditActorKind;
+  /** Which machine credential, when one was used. */
+  readonly actorTokenId: string | null;
+  /** `noun.verb`: `project.update`, `member.add`, `artifact.push`. */
+  readonly action: string;
+  readonly resourceType: AuditResourceType;
+  /** A project name, a repository name, `repo:tag`, a user id. */
+  readonly resource: string;
+  /** Null for a change to a user, which belongs to no project. */
+  readonly project: string | null;
+  readonly detail: Record<string, unknown> | null;
+  readonly createdAt: number;
+}
+
+/** `cursor` is opaque; pass it back as `?cursor=` for the next page. Null at the end. */
+export interface AuditPage {
+  readonly events: readonly AuditEvent[];
+  readonly cursor: string | null;
+}
+
 /** One day of activity. `day` is an ISO calendar date in UTC. */
 export interface UsagePoint {
   readonly day: string;

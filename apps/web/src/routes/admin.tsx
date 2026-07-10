@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@workspace/ui/components/table";
+import { AuditLog } from "@/components/audit-log";
 import { RepositoryTable } from "@/components/repository-table";
 import { ApiError, api } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -283,19 +284,25 @@ function Admin() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Registry health, repositories and accounts.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Registry health, repositories, accounts, and who changed what.
+        </p>
       </div>
 
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="users">Users</TabsTrigger>
+          <TabsTrigger value="audit">Audit</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="pt-6">
           <Overview />
         </TabsContent>
         <TabsContent value="users" className="pt-6">
           <Users />
+        </TabsContent>
+        <TabsContent value="audit" className="pt-6">
+          <AuditLog />
         </TabsContent>
       </Tabs>
     </div>

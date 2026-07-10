@@ -1,5 +1,7 @@
 import type {
   AccessTokenSummary,
+  AuditPage,
+  AuditResourceType,
   AuthProviders,
   CleanupPolicy,
   CreatedAccessToken,
@@ -92,6 +94,23 @@ export const api = {
   session: () => request<SessionUser>("/auth/session"),
 
   stats: () => request<RegistryStats>("/stats"),
+
+  /** Who changed what. Administrators only; `cursor` pages backwards in time. */
+  audit: (query: {
+    resourceType?: AuditResourceType;
+    project?: string;
+    actor?: string;
+    action?: string;
+    cursor?: string;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    const search = params.toString();
+    return request<AuditPage>(`/audit${search === "" ? "" : `?${search}`}`);
+  },
 
   repositories: (search?: string) => {
     const query = search === undefined || search === "" ? "" : `?search=${encodeURIComponent(search)}`;

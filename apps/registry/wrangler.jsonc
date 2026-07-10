@@ -61,6 +61,8 @@
     "RATE_LIMIT_USER_RPM": "3000",
     "TOKEN_TTL_SECONDS": "300",
     "UNTAGGED_MANIFEST_TTL_DAYS": "0",
+    // Days an audit event is kept. "0" keeps everything.
+    "AUDIT_RETENTION_DAYS": "365",
   },
 
   "env": {

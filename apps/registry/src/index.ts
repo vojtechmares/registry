@@ -1,10 +1,12 @@
 import { OciError } from "@registry/oci";
 import { errorResponse, handleRegistryRequest, type RegistryContext } from "@registry/registry-core";
+import { AuditStore, actorOf } from "./audit/store.js";
+import { auditEntriesFor } from "./audit/translate.js";
 import { createAuthorize } from "./auth/authorize.js";
 import { readConfig } from "./auth/config.js";
 import { resolvePrincipal, type Principal } from "./auth/principal.js";
 import { AuthStore } from "./auth/store.js";
-import { readCoreConfig, type Env } from "./env.js";
+import { integer, readCoreConfig, type Env } from "./env.js";
 import { EventCollector } from "./events.js";
 import { runDueCleanups } from "./lifecycle/cleanup.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
@@ -40,6 +42,9 @@ const NIGHTLY_CRON = "17 3 * * *";
 /** Finished tasks are kept for a week, long enough to explain a failure. */
 const TASK_RETENTION_MS = 7 * 86_400_000;
 
+/** A year, unless configured otherwise. An audit log is not a cache. */
+const DEFAULT_AUDIT_RETENTION_DAYS = 365;
+
 /** Every kind of background work the queue knows how to run. */
 const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   [NOTIFY_TASK]: handleNotifyTask,
@@ -51,7 +56,14 @@ async function nightlyMaintenance(env: Env): Promise<void> {
   const reclaimed = await collectGarbage(env);
   const pruned = await new StatsStore(env.DB).prune();
   const tasks = await new TaskQueue(env.DB).prune(TASK_RETENTION_MS);
-  console.log("nightly maintenance complete", { retired, reclaimed, pruned, tasks });
+
+  const auditDays = integer(env.AUDIT_RETENTION_DAYS, DEFAULT_AUDIT_RETENTION_DAYS);
+  // Zero keeps everything: a registry under a retention obligation must be able
+  // to say "never delete this", and `integer` reads an unset variable as the
+  // fallback rather than as zero.
+  const audit = auditDays === 0 ? 0 : await new AuditStore(env.DB).prune(auditDays * 86_400_000);
+
+  console.log("nightly maintenance complete", { retired, reclaimed, pruned, tasks, audit });
 }
 
 /**
@@ -166,6 +178,15 @@ async function recordEvents(
     await new StatsStore(env.DB).record(events.events);
   } catch (error) {
     console.error("failed to record usage", error);
+  }
+
+  try {
+    await new AuditStore(env.DB).recordMany(auditEntriesFor(events.events, actorOf(principal)));
+  } catch (error) {
+    // Swallowed like the counters above, and for the same reason: the response
+    // has already gone. A push that succeeded must not be reported as failed
+    // because the row recording it could not be written.
+    console.error("failed to record audit events", error);
   }
 
   const actor = { username: principal.kind === "anonymous" ? "anonymous" : principal.identity.username };

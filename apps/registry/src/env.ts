@@ -35,6 +35,12 @@ export interface Env {
   readonly UNTAGGED_MANIFEST_TTL_DAYS?: string;
 
   /**
+   * How long an audit event is kept, in days. `0` keeps everything, for a
+   * registry under a retention obligation. Defaults to a year.
+   */
+  readonly AUDIT_RETENTION_DAYS?: string;
+
+  /**
    * Email notifications, sent through any provider that accepts
    * `{from, to, subject, text}` as JSON with a bearer token. All three or none:
    * a half-configured provider is a permanent delivery failure, and says so.
