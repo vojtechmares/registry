@@ -2,14 +2,26 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CleanupPolicy,
+  CleanupRule,
   NotificationPolicySummary,
   ReplicationRuleSummary,
 } from "@registry/api-contract";
+// The very engine the cron will run the filter with, so a pattern this form
+// accepts is one the scheduled cleanup accepts.
+import { isValidRegex } from "@registry/regex";
+import { parseRange } from "@registry/semver";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Switch } from "@workspace/ui/components/switch";
 import { toast } from "@workspace/ui/components/sonner";
@@ -85,7 +97,10 @@ function CleanupCard({ name }: { name: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Cleanup</CardTitle>
-        <CardDescription>Keep the newest N tags in every repository on a schedule.</CardDescription>
+        <CardDescription>
+          A rule governs a set of tags and says how many to keep. A tag no rule governs is never touched, so a
+          filter that matches nothing deletes nothing.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {data === undefined ? (
@@ -98,6 +113,67 @@ function CleanupCard({ name }: { name: string }) {
   );
 }
 
+/** In UTC, and at three in the morning, which is when the registry is quietest. */
+const SCHEDULES = [
+  { label: "Daily", cron: "0 3 * * *" },
+  { label: "Weekly", cron: "0 3 * * 0" },
+  { label: "Monthly", cron: "0 3 1 * *" },
+] as const;
+
+/** How a rule picks the tags it governs. Exactly one, because more is a puzzle. */
+type FilterMode = "all" | "pattern" | "regex" | "semver";
+
+const FILTER_LABELS: Readonly<Record<FilterMode, string>> = {
+  all: "Every tag",
+  pattern: "Glob pattern",
+  regex: "Regular expression",
+  semver: "Semver range",
+};
+
+const FILTER_HINTS: Readonly<Record<FilterMode, string>> = {
+  all: "Every tag in the matched repositories is governed by this rule.",
+  pattern: "Anchored at both ends. `*` matches any run of characters, `?` exactly one.",
+  regex: "Searched, not anchored: `rc` finds `v1-rc1`. Use `^` and `$` to demand the whole tag.",
+  semver: "A range such as `^1.2.3`, `>=1.0.0 <2.0.0`, or `1.x`. A tag that is not a version never matches.",
+};
+
+const FILTER_PLACEHOLDERS: Readonly<Record<FilterMode, string>> = {
+  all: "",
+  pattern: "release-*",
+  regex: "^v\\d+\\.\\d+\\.\\d+$",
+  semver: "^1.2.3",
+};
+
+function modeOf(rule: CleanupRule | undefined): FilterMode {
+  if (rule === undefined) return "all";
+  if (rule.tags.regex !== undefined && rule.tags.regex !== "") return "regex";
+  if (rule.tags.semver !== undefined && rule.tags.semver !== "") return "semver";
+  if (rule.tags.pattern !== undefined && rule.tags.pattern !== "") return "pattern";
+  return "all";
+}
+
+function valueOf(rule: CleanupRule | undefined, mode: FilterMode): string {
+  if (rule === undefined || mode === "all") return "";
+  return rule.tags[mode] ?? "";
+}
+
+/**
+ * Why the filter will not be accepted, or null.
+ *
+ * Checked here with the very engine the registry will run it with, so a pattern
+ * this form accepts is one the cron will accept. The server checks it again -
+ * this is a courtesy, not a control.
+ *
+ * An empty filter is not an error here: the field is `required`, and letting the
+ * browser say so beats disabling the save button with no explanation.
+ */
+function filterError(mode: FilterMode, value: string): string | null {
+  if (value === "") return null;
+  if (mode === "regex" && !isValidRegex(value)) return "Not a regular expression this registry can run.";
+  if (mode === "semver" && parseRange(value) === null) return "Not a semver range.";
+  return null;
+}
+
 /**
  * Mounted only once the policy has loaded, so the form's initial state is the
  * stored state. A later refetch updates what is reported above the form without
@@ -105,8 +181,22 @@ function CleanupCard({ name }: { name: string }) {
  */
 function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }) {
   const queryClient = useQueryClient();
+  const stored = policy.rules[0];
+
   const [schedule, setSchedule] = useState(policy.schedule);
-  const [keepLast, setKeepLast] = useState(String(policy.rules[0]?.keepLast ?? 10));
+  const [repositories, setRepositories] = useState(stored?.repositories ?? "*");
+  const [mode, setMode] = useState<FilterMode>(modeOf(stored));
+  const [filter, setFilter] = useState(valueOf(stored, modeOf(stored)));
+  const [includePrerelease, setIncludePrerelease] = useState(stored?.tags.includePrerelease ?? false);
+  const [keepBy, setKeepBy] = useState<"updated" | "semver">(stored?.keepBy ?? "updated");
+  const [keepLast, setKeepLast] = useState(String(stored?.keepLast ?? 10));
+  const [keepWithinDays, setKeepWithinDays] = useState(
+    stored?.keepWithinDays === null || stored?.keepWithinDays === undefined
+      ? ""
+      : String(stored.keepWithinDays),
+  );
+
+  const problem = filterError(mode, filter);
 
   const save = useMutation({
     mutationFn: (input: Pick<CleanupPolicy, "enabled" | "schedule" | "rules">) =>
@@ -117,6 +207,13 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
     },
     onError: (error) => toast.error(message(error, "Could not save")),
   });
+
+  const tagsOf = (): CleanupRule["tags"] => {
+    if (mode === "all") return {};
+    if (mode === "pattern") return { pattern: filter };
+    if (mode === "regex") return { regex: filter };
+    return { semver: filter, includePrerelease };
+  };
 
   return (
     <div className="space-y-4">
@@ -157,41 +254,159 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
       </p>
 
       <form
-        className="flex flex-wrap items-end gap-3"
+        className="space-y-5"
         onSubmit={(event) => {
           event.preventDefault();
+          if (problem !== null) return;
           save.mutate({
             // Saving the first rule turns cleanup on; saving a change to a policy
             // that was deliberately switched off leaves it off.
             enabled: policy.enabled || policy.rules.length === 0,
             schedule,
             rules: [
-              { repositories: "*", tags: {}, keepLast: Number(keepLast) || null, keepWithinDays: null },
+              {
+                repositories: repositories === "" ? "*" : repositories,
+                tags: tagsOf(),
+                keepLast: Number(keepLast) || null,
+                keepWithinDays: Number(keepWithinDays) || null,
+                keepBy,
+              },
             ],
           });
         }}
       >
         <div className="space-y-2">
           <Label htmlFor="cron">Schedule (cron, UTC)</Label>
-          <Input
-            id="cron"
-            className="w-40 font-mono"
-            value={schedule}
-            onChange={(event) => setSchedule(event.target.value)}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id="cron"
+              className="w-40 font-mono"
+              placeholder="0 3 * * *"
+              value={schedule}
+              onChange={(event) => setSchedule(event.target.value)}
+            />
+            {SCHEDULES.map((preset) => (
+              <Button
+                key={preset.label}
+                type="button"
+                variant={schedule === preset.cron ? "secondary" : "outline"}
+                size="sm"
+                onClick={() => setSchedule(preset.cron)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Five fields: minute, hour, day of month, month, day of week.
+          </p>
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="keep">Keep newest</Label>
-          <Input
-            id="keep"
-            type="number"
-            min="1"
-            className="w-28"
-            value={keepLast}
-            onChange={(event) => setKeepLast(event.target.value)}
-          />
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="repositories">Repositories</Label>
+            <Input
+              id="repositories"
+              className="font-mono"
+              placeholder="*"
+              value={repositories}
+              onChange={(event) => setRepositories(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              A glob over repository names in this project. `*` for all of them.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="filter-mode">Select tags by</Label>
+            <Select value={mode} onValueChange={(next) => setMode(next as FilterMode)}>
+              <SelectTrigger id="filter-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(FILTER_LABELS) as FilterMode[]).map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {FILTER_LABELS[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{FILTER_HINTS[mode]}</p>
+          </div>
         </div>
-        <Button type="submit" disabled={save.isPending}>
+
+        {mode !== "all" && (
+          <div className="space-y-2">
+            <Label htmlFor="filter">{FILTER_LABELS[mode]}</Label>
+            <Input
+              id="filter"
+              required
+              className="font-mono"
+              placeholder={FILTER_PLACEHOLDERS[mode]}
+              value={filter}
+              aria-invalid={problem !== null}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+            {problem !== null && <p className="text-xs text-destructive">{problem}</p>}
+            {mode === "semver" && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-primary"
+                  checked={includePrerelease}
+                  onChange={(event) => setIncludePrerelease(event.target.checked)}
+                />
+                Include prereleases
+              </label>
+            )}
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-2">
+            <Label htmlFor="keep">Keep newest</Label>
+            <Input
+              id="keep"
+              type="number"
+              min="0"
+              placeholder="none"
+              value={keepLast}
+              onChange={(event) => setKeepLast(event.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="keep-by">Newest means</Label>
+            <Select value={keepBy} onValueChange={(next) => setKeepBy(next as "updated" | "semver")}>
+              <SelectTrigger id="keep-by">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="updated">Most recently pushed</SelectItem>
+                <SelectItem value="semver">Highest version</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="keep-days">Keep within (days)</Label>
+            <Input
+              id="keep-days"
+              type="number"
+              min="0"
+              placeholder="none"
+              value={keepWithinDays}
+              onChange={(event) => setKeepWithinDays(event.target.value)}
+            />
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          A governed tag survives if either rule keeps it. Keeping nothing on both grounds deletes every tag
+          the filter matches.
+        </p>
+
+        <Button type="submit" disabled={save.isPending || problem !== null}>
           Save
         </Button>
       </form>

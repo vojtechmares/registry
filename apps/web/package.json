@@ -12,6 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@registry/api-contract": "workspace:*",
+    "@registry/regex": "workspace:*",
+    "@registry/semver": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "@tanstack/react-router": "^1.132.0",
     "@tanstack/react-store": "^0.7.7",
@@ -19,8 +22,7 @@
     "@workspace/ui": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "@registry/api-contract": "workspace:*"
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",

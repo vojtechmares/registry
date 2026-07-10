@@ -164,6 +164,117 @@ describe("the cleanup card", () => {
     expect(mocks.setCleanupPolicy).toHaveBeenCalledWith("acme", expect.objectContaining({ enabled: true }));
   });
 
+  it("fills the schedule from a quick action", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByRole("button", { name: "Weekly" }));
+    expect(screen.getByLabelText(/Schedule/i)).toHaveValue("0 3 * * 0");
+
+    await user.click(screen.getByRole("button", { name: "Monthly" }));
+    expect(screen.getByLabelText(/Schedule/i)).toHaveValue("0 3 1 * *");
+  });
+
+  it("saves a rule that selects tags by regular expression", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByLabelText("Select tags by"));
+    await user.click(screen.getByRole("option", { name: "Regular expression" }));
+    await user.type(screen.getByLabelText("Regular expression"), "^nightly-");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mocks.setCleanupPolicy).toHaveBeenCalledWith(
+      "acme",
+      expect.objectContaining({
+        rules: [
+          {
+            repositories: "*",
+            tags: { regex: "^nightly-" },
+            keepLast: 5,
+            keepWithinDays: null,
+            keepBy: "updated",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("refuses to save a regular expression the registry could not run", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByLabelText("Select tags by"));
+    await user.click(screen.getByRole("option", { name: "Regular expression" }));
+    // Lookahead needs a backtracking engine, so this one is refused outright.
+    await user.type(screen.getByLabelText("Regular expression"), "^(?=v)");
+
+    expect(screen.getByText(/Not a regular expression this registry can run/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(mocks.setCleanupPolicy).not.toHaveBeenCalled();
+  });
+
+  it("saves a semver rule that ranks by version rather than by push time", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByLabelText("Select tags by"));
+    await user.click(screen.getByRole("option", { name: "Semver range" }));
+    await user.type(screen.getByLabelText("Semver range"), "^1.2.3");
+    await user.click(screen.getByRole("checkbox", { name: /Include prereleases/i }));
+
+    await user.click(screen.getByLabelText("Newest means"));
+    await user.click(screen.getByRole("option", { name: "Highest version" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mocks.setCleanupPolicy).toHaveBeenCalledWith(
+      "acme",
+      expect.objectContaining({
+        rules: [
+          {
+            repositories: "*",
+            tags: { semver: "^1.2.3", includePrerelease: true },
+            keepLast: 5,
+            keepWithinDays: null,
+            keepBy: "semver",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("flags a semver range that will not parse", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByLabelText("Select tags by"));
+    await user.click(screen.getByRole("option", { name: "Semver range" }));
+    await user.type(screen.getByLabelText("Semver range"), "garbage");
+
+    expect(screen.getByText(/Not a semver range/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("seeds the filter mode from a stored regex rule", async () => {
+    mocks.cleanupPolicy.mockResolvedValue({
+      ...policy,
+      rules: [
+        {
+          repositories: "acme/*",
+          tags: { regex: "^rc-" },
+          keepLast: 2,
+          keepWithinDays: 30,
+          keepBy: "semver" as const,
+        },
+      ],
+    });
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    expect(await screen.findByLabelText("Regular expression")).toHaveValue("^rc-");
+    expect(screen.getByLabelText("Repositories")).toHaveValue("acme/*");
+    expect(screen.getByLabelText(/Keep within/i)).toHaveValue(30);
+  });
+
   it("leaves a deliberately disabled policy disabled when its schedule is edited", async () => {
     mocks.cleanupPolicy.mockResolvedValue({ ...policy, enabled: false, nextRunAt: null });
     const user = userEvent.setup();
