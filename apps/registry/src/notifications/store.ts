@@ -157,9 +157,10 @@ export class NotificationStore {
     limit: number,
   ): Promise<
     Array<{
+      id: string;
       policyId: string;
       eventType: string;
-      status: string;
+      status: "delivered" | "failed";
       responseStatus: number | null;
       error: string | null;
       createdAt: number;
@@ -167,20 +168,23 @@ export class NotificationStore {
   > {
     const rows = await this.db
       .prepare(
-        `SELECT policy_id, event_type, status, response_status, error, created_at
+        `SELECT id, policy_id, event_type, status, response_status, error, created_at
          FROM notification_deliveries WHERE project = ? ORDER BY created_at DESC LIMIT ?`,
       )
       .bind(project, limit)
       .all<{
+        id: string;
         policy_id: string;
         event_type: string;
-        status: string;
+        // Narrower than the column, which `recordDelivery` is the only writer of.
+        status: "delivered" | "failed";
         response_status: number | null;
         error: string | null;
         created_at: number;
       }>();
 
     return rows.results.map((row) => ({
+      id: row.id,
       policyId: row.policy_id,
       eventType: row.event_type,
       status: row.status,

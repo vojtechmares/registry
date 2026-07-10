@@ -375,3 +375,91 @@ describe("project-scoped tokens", () => {
     expect(other.status).toBe(404);
   });
 });
+
+/**
+ * Adding a member by name.
+ *
+ * The `PUT` form of the members route takes a user id, and only an
+ * administrator may turn a name into one - `GET /users` is admin-only. So an
+ * owner who is not an administrator needs the registry to resolve the name for
+ * them, without being handed the list it resolved it against.
+ */
+describe("adding a project member by username", () => {
+  const jsonHeaders = { "Content-Type": "application/json" };
+
+  beforeAll(async () => {
+    await seedProject({ name: "add-member" });
+    await seedMember("add-member", ALICE.id, "owner");
+  });
+
+  async function addMember(body: unknown, auth: string): Promise<Response> {
+    return call("POST", "/api/v1/projects/add-member/members", {
+      headers: { ...jsonHeaders, Authorization: auth },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("resolves the username to a user id, for an owner who may not list users", async () => {
+    // The premise: alice owns the project but cannot see the user list at all.
+    const users = await call("GET", "/api/v1/users", { headers: { Authorization: aliceAuth } });
+    expect(users.status).toBe(403);
+
+    const response = await addMember({ username: BOB.username, role: "developer" }, aliceAuth);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      project: "add-member",
+      userId: BOB.id,
+      username: BOB.username,
+      role: "developer",
+    });
+
+    const row = await env.DB.prepare("SELECT role FROM project_members WHERE project = ? AND user_id = ?")
+      .bind("add-member", BOB.id)
+      .first<{ role: string }>();
+    expect(row?.role).toBe("developer");
+  });
+
+  it("refuses a caller who does not own the project", async () => {
+    const response = await addMember({ username: ALICE.username, role: "owner" }, bobAuth);
+    expect(response.status).toBe(403);
+  });
+
+  it("refuses an unknown username", async () => {
+    const response = await addMember({ username: "nobody", role: "guest" }, aliceAuth);
+    expect(response.status).toBe(404);
+  });
+
+  it("refuses a role that is not one of the four", async () => {
+    const response = await addMember({ username: BOB.username, role: "root" }, aliceAuth);
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a request with no username", async () => {
+    const response = await addMember({ role: "guest" }, aliceAuth);
+    expect(response.status).toBe(400);
+  });
+
+  it("will not demote the last owner, however it is spelled", async () => {
+    await seedProject({ name: "sole-owner" });
+    await seedMember("sole-owner", ALICE.id, "owner");
+
+    const response = await call("POST", "/api/v1/projects/sole-owner/members", {
+      headers: { ...jsonHeaders, Authorization: aliceAuth },
+      body: JSON.stringify({ username: ALICE.username, role: "guest" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("is closed to a machine token, as the rest of the control plane is", async () => {
+    const secret = await seedToken({
+      id: "projtoken0000006",
+      secret: "v".repeat(43),
+      userId: ADMIN.id,
+      scopes: [{ repository: "*", actions: ["pull", "push"] }],
+      project: null,
+    });
+
+    const response = await addMember({ username: BOB.username, role: "owner" }, basic("root", secret));
+    expect(response.status).toBe(403);
+  });
+});

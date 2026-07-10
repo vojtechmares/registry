@@ -1,4 +1,12 @@
-import type { CleanupRule, ProjectSettings, Visibility } from "@registry/api-contract";
+import type {
+  CleanupRule,
+  NotificationDelivery,
+  NotificationPolicySummary,
+  ProjectSettings,
+  ReplicationExecution,
+  ReplicationRuleSummary,
+  Visibility,
+} from "@registry/api-contract";
 import { isValidCron } from "@registry/cron";
 import {
   EVENT_TYPES,
@@ -124,7 +132,7 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
   if (section === "stats" && target === undefined) return projectStats(ctx, name);
   if (section === "cleanup" && target === undefined) return cleanupPolicy(ctx, name);
   if (section === "events" && target === undefined) return cleanupEvents(ctx, name);
-  if (section === "members" && target === undefined) return listMembers(ctx, name);
+  if (section === "members" && target === undefined) return members(ctx, name);
   if (section === "members" && target !== undefined) return member(ctx, name, target);
   if (section === "notifications" && target === undefined) return notificationPolicies(ctx, name);
   if (section === "notifications" && target !== undefined) return removeNotification(ctx, name, target);
@@ -188,7 +196,10 @@ async function replicationRules(ctx: ProjectContext, name: string): Promise<Resp
   await requireProjectOwner(ctx, name);
 
   if (ctx.request.method === "GET") {
-    return Response.json({ rules: await ctx.replication.list(name) });
+    // Annotated, so that a rule shape the dashboard does not know about cannot
+    // reach it without the contract being updated first.
+    const rules: ReplicationRuleSummary[] = await ctx.replication.list(name);
+    return Response.json({ rules });
   }
   if (ctx.request.method !== "POST") throw notFound();
   if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
@@ -291,7 +302,8 @@ async function executions(ctx: ProjectContext, name: string): Promise<Response> 
   await requireProjectOwner(ctx, name);
 
   const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
-  return Response.json({ executions: await ctx.replication.executions(name, limit) });
+  const history: ReplicationExecution[] = await ctx.replication.executions(name, limit);
+  return Response.json({ executions: history });
 }
 
 /**
@@ -306,7 +318,8 @@ async function notificationPolicies(ctx: ProjectContext, name: string): Promise<
   await requireProjectOwner(ctx, name);
 
   if (ctx.request.method === "GET") {
-    return Response.json({ policies: await ctx.notifications.list(name) });
+    const policies: NotificationPolicySummary[] = await ctx.notifications.list(name);
+    return Response.json({ policies });
   }
   if (ctx.request.method !== "POST") throw notFound();
   if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
@@ -377,7 +390,8 @@ async function deliveries(ctx: ProjectContext, name: string): Promise<Response> 
   await requireProjectOwner(ctx, name);
 
   const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
-  return Response.json({ deliveries: await ctx.notifications.deliveries(name, limit) });
+  const log: NotificationDelivery[] = await ctx.notifications.deliveries(name, limit);
+  return Response.json({ deliveries: log });
 }
 
 /**
@@ -645,10 +659,50 @@ async function projectRepositories(ctx: ProjectContext, name: string): Promise<R
   return Response.json({ repositories });
 }
 
-async function listMembers(ctx: ProjectContext, name: string): Promise<Response> {
-  if (ctx.request.method !== "GET") throw notFound();
+/** `GET` lists the members; `POST` adds one by username. */
+async function members(ctx: ProjectContext, name: string): Promise<Response> {
+  if (ctx.request.method === "GET") {
+    await requireProjectOwner(ctx, name);
+    return Response.json({ members: await ctx.projects.members(name) });
+  }
+  if (ctx.request.method !== "POST") throw notFound();
+  return addMember(ctx, name);
+}
+
+/**
+ * Grants a role to a user named by username rather than by id.
+ *
+ * The `PUT` form of this route needs a user id, and the only route that turns a
+ * name into one - `GET /users` - is reserved to administrators. Resolving the
+ * name here lets an owner who is not an administrator add somebody to their own
+ * project without the registry handing over the list it resolved against.
+ */
+async function addMember(ctx: ProjectContext, name: string): Promise<Response> {
   await requireProjectOwner(ctx, name);
-  return Response.json({ members: await ctx.projects.members(name) });
+  if (!(await ctx.projects.exists(name))) throw notFound(`project "${name}" does not exist`);
+
+  const body = await readJson<{ username?: string; role?: string }>(ctx.request);
+
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  if (username === "") throw badRequest("username is required");
+  if (typeof body.role !== "string" || !isRole(body.role)) {
+    throw badRequest("role must be one of guest, developer, maintainer, owner");
+  }
+
+  const user = await ctx.auth.findUserByUsername(username);
+  if (user === null) throw notFound("no such user");
+
+  // Re-granting a role is how a member is demoted, so the guard that protects
+  // the last owner on `PUT` has to hold here too.
+  if (body.role !== "owner" && (await lastOwner(ctx, name, user.id))) {
+    throw badRequest("a project must keep at least one owner");
+  }
+
+  await ctx.projects.setMember(name, user.id, body.role);
+  return Response.json(
+    { project: name, userId: user.id, username: user.username, role: body.role },
+    { status: 201 },
+  );
 }
 
 async function member(ctx: ProjectContext, name: string, userId: string): Promise<Response> {

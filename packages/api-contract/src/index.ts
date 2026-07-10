@@ -223,3 +223,88 @@ export interface AuthProviders {
   readonly password: boolean;
   readonly oidc: boolean;
 }
+
+/** What the registry tells an outside listener about. */
+export type NotificationEventType =
+  | "PUSH_ARTIFACT"
+  | "PULL_ARTIFACT"
+  | "DELETE_ARTIFACT"
+  | "QUOTA_EXCEEDED"
+  | "REPLICATION"
+  | "CLEANUP";
+
+export type NotificationTargetType = "webhook" | "email";
+
+/**
+ * A notification policy as the dashboard sees it.
+ *
+ * Without its secret, deliberately: the secret that signs a webhook's payload
+ * is shown once, in the response that creates the policy, and is never listed.
+ */
+export interface NotificationPolicySummary {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly targetType: NotificationTargetType;
+  /** A URL for a webhook, an address for an email. */
+  readonly target: string;
+  readonly eventTypes: readonly NotificationEventType[];
+}
+
+/** One attempt at delivering one event, so a silently broken endpoint can be found. */
+export interface NotificationDelivery {
+  readonly id: string;
+  readonly policyId: string;
+  /** Recorded as it was sent. A policy since retyped leaves its old rows behind. */
+  readonly eventType: string;
+  readonly status: "delivered" | "failed";
+  readonly responseStatus: number | null;
+  readonly error: string | null;
+  readonly createdAt: number;
+}
+
+export type ReplicationDirection = "push" | "pull";
+
+/** `event` fires on every push; `scheduled` on a cron; `manual` only when asked. */
+export type ReplicationTrigger = "manual" | "event" | "scheduled";
+
+/**
+ * A replication rule as the dashboard sees it. The remote username identifies
+ * the rule's account; the password is sealed at rest and never returned.
+ */
+export interface ReplicationRuleSummary {
+  readonly id: string;
+  readonly project: string;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly direction: ReplicationDirection;
+  readonly remoteUrl: string;
+  readonly destinationNamespace: string;
+  readonly repositoryFilter: string;
+  readonly sourceRepositories: readonly string[];
+  readonly tagFilter: {
+    readonly pattern?: string | undefined;
+    readonly semver?: string | undefined;
+    readonly includePrerelease?: boolean | undefined;
+  };
+  readonly trigger: ReplicationTrigger;
+  readonly schedule: string | null;
+  readonly remoteUsername: string | null;
+  readonly nextRunAt: number | null;
+  readonly lastRunAt: number | null;
+  readonly lastResult: string | null;
+}
+
+/** What one run of a rule copied, so a rule that quietly stopped working can be found. */
+export interface ReplicationExecution {
+  readonly id: string;
+  readonly ruleId: string;
+  readonly status: "succeeded" | "failed";
+  readonly repository: string | null;
+  readonly reference: string | null;
+  readonly manifests: number;
+  readonly blobs: number;
+  readonly error: string | null;
+  readonly createdAt: number;
+}

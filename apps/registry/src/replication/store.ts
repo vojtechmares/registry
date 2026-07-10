@@ -256,13 +256,15 @@ export class ReplicationStore {
   async executions(project: string, limit: number) {
     const rows = await this.db
       .prepare(
-        `SELECT rule_id, status, repository, reference, manifests, blobs, error, created_at
+        `SELECT id, rule_id, status, repository, reference, manifests, blobs, error, created_at
          FROM replication_executions WHERE project = ? ORDER BY created_at DESC LIMIT ?`,
       )
       .bind(project, limit)
       .all<{
+        id: string;
         rule_id: string;
-        status: string;
+        // Narrower than the column, which `recordExecution` is the only writer of.
+        status: "succeeded" | "failed";
         repository: string | null;
         reference: string | null;
         manifests: number;
@@ -272,6 +274,7 @@ export class ReplicationStore {
       }>();
 
     return rows.results.map((row) => ({
+      id: row.id,
       ruleId: row.rule_id,
       status: row.status,
       repository: row.repository,
