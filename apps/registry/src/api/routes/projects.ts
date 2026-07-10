@@ -194,12 +194,20 @@ projects.get(
   }),
   validate("param", ProjectParam),
   async (c) => {
+    const principal = principalOf(c);
     const { project } = c.req.valid("param");
+
+    // A pinned token sees nothing outside its project, whatever its owner can
+    // see. Without this, a token scoped to one project could name another and
+    // read back every repository an administrator who owns it can see.
+    const pin = tokenProjectPin(principal);
+    if (pin !== null && pin !== project) return c.json({ repositories: [] });
+
     const repositories = await storesOf(c).admin.listRepositories({
       search: null,
       limit: 500,
       project,
-      visibleTo: viewerOf(principalOf(c)),
+      visibleTo: viewerOf(principal),
     });
     return c.json({ repositories });
   },

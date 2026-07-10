@@ -373,6 +373,19 @@ describe("project-scoped tokens", () => {
     // A project it is not pinned to is invisible, not merely forbidden.
     const other = await call("GET", "/api/v1/projects/scoped-b", { headers: { Authorization: tokenAuth } });
     expect(other.status).toBe(404);
+
+    // ...nor may it name another project and read the listing back. This route
+    // filters by what the token's *owner* can see, and the owner is an admin.
+    const inside = await call("GET", "/api/v1/projects/scoped-a/repositories", {
+      headers: { Authorization: tokenAuth },
+    });
+    expect(((await inside.json()) as { repositories: unknown[] }).repositories.length).toBeGreaterThan(0);
+
+    const outside = await call("GET", "/api/v1/projects/scoped-b/repositories", {
+      headers: { Authorization: tokenAuth },
+    });
+    expect(outside.status).toBe(200);
+    expect((await outside.json()) as { repositories: unknown[] }).toEqual({ repositories: [] });
   });
 });
 
