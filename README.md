@@ -99,3 +99,25 @@ Worker behaviour is set through `vars` in `wrangler.jsonc`:
 
 Secrets (`JWT_SECRET`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD_HASH`)
 are set with `wrangler secret put`.
+
+## Known limitations
+
+Found during review and deliberately deferred, not defects that corrupt data or
+leak access:
+
+- **Replication does not copy an artifact's signatures.** `copyArtifact` walks
+  config, layers, and index children, not referrers, so a replicated image
+  arrives unsigned. Replicating _into_ a project that requires signatures on
+  push therefore fails at the destination (loudly, recorded as a failed
+  execution) rather than silently. Pulling from Docker Hub and pushing to a
+  permissive downstream mirror both work.
+- **Untagged retirement measures age from push time, not from when the tag was
+  removed.** A manifest older than the TTL is retired the moment it becomes
+  untagged, so the grace period is not a grace period for old images. This
+  matches the pre-existing nightly lifecycle job; both would need an
+  "untagged-since" timestamp to honour the window.
+- **The 0004 migration moved per-repository grants to per-project membership.**
+  That is the intended model - a project has members, not per-repository ACLs -
+  but a pre-existing grant on one repository becomes access to its whole
+  project. It matters only for a registry that already had heterogeneous
+  per-repository grants before the migration.
