@@ -131,4 +131,55 @@ describe("project endpoints", () => {
     expect(url).toBe("/api/v1/auth/providers");
     expect(providers.oidc).toBe(true);
   });
+
+  // The dashboard never learns user ids: `GET /users` is admin-only, so an owner
+  // adds a member by the name they know them by and the registry resolves it.
+  it("adds a member by username, against the collection", async () => {
+    const fetchSpy = mockFetch({
+      status: 201,
+      body: { project: "acme", userId: "u1", username: "bob", role: "developer" },
+    });
+    const member = await api.addMember("acme", "bob", "developer");
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/projects/acme/members");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ username: "bob", role: "developer" }));
+    expect(member.userId).toBe("u1");
+  });
+
+  it("escapes a project name in every path it appears in", async () => {
+    const fetchSpy = mockFetch({ status: 204 });
+    await api.deleteNotification("a b", "id/1");
+
+    const [url] = fetchSpy.mock.calls[0] as [string];
+    expect(url).toBe("/api/v1/projects/a%20b/notifications/id%2F1");
+  });
+
+  it("unwraps the notification and replication envelopes", async () => {
+    mockFetch({ body: { policies: [{ id: "n1" }] } });
+    await expect(api.notifications("acme")).resolves.toEqual([{ id: "n1" }]);
+
+    mockFetch({ body: { rules: [{ id: "r1" }] } });
+    await expect(api.replicationRules("acme")).resolves.toEqual([{ id: "r1" }]);
+  });
+
+  it("reads the delivery log and the execution history, bounded", async () => {
+    const fetchSpy = mockFetch({ body: { deliveries: [] } });
+    await api.deliveries("acme");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/v1/projects/acme/deliveries?limit=50");
+
+    const executionSpy = mockFetch({ body: { executions: [] } });
+    await api.executions("acme", 10);
+    expect(executionSpy.mock.calls[0]?.[0]).toBe("/api/v1/projects/acme/executions?limit=10");
+  });
+
+  it("runs a replication rule now", async () => {
+    const fetchSpy = mockFetch({ status: 202, body: { queued: true } });
+    await api.runReplicationRule("acme", "r1");
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/projects/acme/replication/r1");
+    expect(init.method).toBe("POST");
+  });
 });

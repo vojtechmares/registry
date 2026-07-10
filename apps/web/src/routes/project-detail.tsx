@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, createRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
-import type { ProjectDetail, Role } from "@registry/api-contract";
+import type { ProjectDetail } from "@registry/api-contract";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Input } from "@workspace/ui/components/input";
@@ -19,6 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "@workspace/ui/components/table";
+import { ProjectMembers } from "@/components/project-members";
+import { ProjectRules } from "@/components/project-rules";
 import { ApiError, api } from "@/lib/api";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
@@ -166,75 +168,6 @@ function Settings({ project }: { project: ProjectDetail }) {
   );
 }
 
-const ROLES: Role[] = ["guest", "developer", "maintainer", "owner"];
-
-function Members({ project }: { project: ProjectDetail }) {
-  const queryClient = useQueryClient();
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["project", project.name] });
-
-  const setRole = useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: Role }) =>
-      api.setMember(project.name, userId, role),
-    onSuccess: invalidate,
-    onError: (error) =>
-      toast.error(error instanceof ApiError ? error.message : "Could not update the member"),
-  });
-
-  const remove = useMutation({
-    mutationFn: (userId: string) => api.removeMember(project.name, userId),
-    onSuccess: invalidate,
-    onError: (error) =>
-      toast.error(error instanceof ApiError ? error.message : "Could not remove the member"),
-  });
-
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Member</TableHead>
-          <TableHead>Role</TableHead>
-          <TableHead className="w-24" />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {project.members.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
-              No explicit members. The project owner and administrators still have access.
-            </TableCell>
-          </TableRow>
-        ) : (
-          project.members.map((member) => (
-            <TableRow key={member.userId}>
-              <TableCell className="font-medium">{member.username}</TableCell>
-              <TableCell>
-                <select
-                  className="rounded-md border bg-background px-2 py-1 text-sm"
-                  value={member.role}
-                  onChange={(event) =>
-                    setRole.mutate({ userId: member.userId, role: event.target.value as Role })
-                  }
-                >
-                  {ROLES.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </TableCell>
-              <TableCell className="text-right">
-                <Button variant="ghost" size="sm" onClick={() => remove.mutate(member.userId)}>
-                  Remove
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
-  );
-}
-
 function Usage({ name }: { name: string }) {
   const { data, isPending } = useQuery({
     queryKey: ["project-stats", name],
@@ -355,7 +288,7 @@ function ProjectPage() {
         )}
         {owns && (
           <TabsContent value="members" className="pt-4">
-            <Members project={data} />
+            <ProjectMembers project={data} />
           </TabsContent>
         )}
         {owns && (
@@ -365,206 +298,6 @@ function ProjectPage() {
         )}
       </Tabs>
     </div>
-  );
-}
-
-/** Cleanup, notifications and replication share a home; each is a compact editor. */
-function ProjectRules({ name }: { name: string }) {
-  return (
-    <div className="space-y-6">
-      <CleanupCard name={name} />
-      <NotificationsCard name={name} />
-      <ReplicationCard name={name} />
-    </div>
-  );
-}
-
-function CleanupCard({ name }: { name: string }) {
-  const queryClient = useQueryClient();
-  const { data } = useQuery({ queryKey: ["cleanup", name], queryFn: () => api.cleanupPolicy(name) });
-  const [schedule, setSchedule] = useState("0 3 * * *");
-  const [keepLast, setKeepLast] = useState("10");
-
-  const save = useMutation({
-    mutationFn: () =>
-      api.setCleanupPolicy(name, {
-        enabled: true,
-        schedule,
-        untaggedOlderThanDays: null,
-        rules: [
-          {
-            repositories: "*",
-            tags: {},
-            keepLast: Number(keepLast) || null,
-            keepWithinDays: null,
-          },
-        ],
-      }),
-    onSuccess: () => {
-      toast.success("Cleanup schedule saved");
-      void queryClient.invalidateQueries({ queryKey: ["cleanup", name] });
-    },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save"),
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Cleanup</CardTitle>
-        <CardDescription>
-          Keep the newest N tags in every repository on a schedule.{" "}
-          {data?.nextRunAt != null && `Next run ${formatRelativeTime(data.nextRunAt)}.`}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            save.mutate();
-          }}
-        >
-          <div className="space-y-2">
-            <Label htmlFor="cron">Schedule (cron, UTC)</Label>
-            <Input
-              id="cron"
-              className="w-40 font-mono"
-              value={schedule}
-              onChange={(e) => setSchedule(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="keep">Keep newest</Label>
-            <Input
-              id="keep"
-              type="number"
-              min="1"
-              className="w-28"
-              value={keepLast}
-              onChange={(e) => setKeepLast(e.target.value)}
-            />
-          </div>
-          <Button type="submit" disabled={save.isPending}>
-            Save
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function NotificationsCard({ name }: { name: string }) {
-  const queryClient = useQueryClient();
-  const [url, setUrl] = useState("");
-
-  const create = useMutation({
-    mutationFn: () =>
-      api.createNotification(name, {
-        name: "webhook",
-        targetType: "webhook",
-        target: url,
-        eventTypes: ["PUSH_ARTIFACT", "DELETE_ARTIFACT"],
-      }),
-    onSuccess: (result) => {
-      toast.success(
-        result.secret === undefined ? "Webhook added" : `Webhook added. Secret: ${result.secret}`,
-        {
-          duration: 12_000,
-        },
-      );
-      setUrl("");
-      void queryClient.invalidateQueries({ queryKey: ["notifications", name] });
-    },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not add the webhook"),
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Webhook notifications</CardTitle>
-        <CardDescription>
-          Post a signed payload to an https endpoint on push and delete. The signing secret is shown once.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            create.mutate();
-          }}
-        >
-          <div className="flex-1 space-y-2">
-            <Label htmlFor="hook">Endpoint</Label>
-            <Input
-              id="hook"
-              type="url"
-              placeholder="https://example.com/hook"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-            />
-          </div>
-          <Button type="submit" disabled={create.isPending || url === ""}>
-            Add
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ReplicationCard({ name }: { name: string }) {
-  const queryClient = useQueryClient();
-  const [remote, setRemote] = useState("");
-
-  const create = useMutation({
-    mutationFn: () =>
-      api.createReplicationRule(name, {
-        name: "downstream",
-        direction: "push",
-        remoteUrl: remote,
-        trigger: "event",
-      }),
-    onSuccess: () => {
-      toast.success("Replication rule created");
-      setRemote("");
-      void queryClient.invalidateQueries({ queryKey: ["replication", name] });
-    },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not create the rule"),
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Replication</CardTitle>
-        <CardDescription>Push every tagged artifact to a downstream registry as it arrives.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            create.mutate();
-          }}
-        >
-          <div className="flex-1 space-y-2">
-            <Label htmlFor="remote">Downstream registry</Label>
-            <Input
-              id="remote"
-              type="url"
-              placeholder="https://registry.example.com"
-              value={remote}
-              onChange={(e) => setRemote(e.target.value)}
-              required
-            />
-          </div>
-          <Button type="submit" disabled={create.isPending || remote === ""}>
-            Add
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
   );
 }
 

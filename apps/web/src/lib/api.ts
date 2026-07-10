@@ -5,10 +5,14 @@ import type {
   CreatedAccessToken,
   LifecyclePolicy,
   ManifestDetail,
+  NotificationDelivery,
+  NotificationPolicySummary,
   ProjectDetail,
   ProjectSettings,
   ProjectSummary,
   RegistryStats,
+  ReplicationExecution,
+  ReplicationRuleSummary,
   RepositoryDetail,
   RepositorySummary,
   Role,
@@ -164,6 +168,19 @@ export const api = {
       { method: "PUT", body: JSON.stringify({ role }) },
     ),
 
+  /**
+   * Adds a member by the name their owner knows them by.
+   *
+   * `setMember` needs a user id, and `users()` - the only way to turn a name
+   * into one - is reserved to administrators. So the registry resolves the name
+   * itself rather than leaking its user list to every project owner.
+   */
+  addMember: (project: string, username: string, role: Role) =>
+    request<{ project: string; userId: string; username: string; role: Role }>(
+      `/projects/${encodeURIComponent(project)}/members`,
+      { method: "POST", body: JSON.stringify({ username, role }) },
+    ),
+
   removeMember: (project: string, userId: string) =>
     request<void>(`/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`, {
       method: "DELETE",
@@ -182,9 +199,15 @@ export const api = {
     }),
 
   notifications: (project: string) =>
-    request<{ policies: unknown[] }>(`/projects/${encodeURIComponent(project)}/notifications`).then(
-      (r) => r.policies,
-    ),
+    request<{ policies: NotificationPolicySummary[] }>(
+      `/projects/${encodeURIComponent(project)}/notifications`,
+    ).then((r) => r.policies),
+
+  /** What was sent and what came back, newest first. */
+  deliveries: (project: string, limit = 50) =>
+    request<{ deliveries: NotificationDelivery[] }>(
+      `/projects/${encodeURIComponent(project)}/deliveries?limit=${limit}`,
+    ).then((r) => r.deliveries),
 
   createNotification: (
     project: string,
@@ -201,9 +224,15 @@ export const api = {
     }),
 
   replicationRules: (project: string) =>
-    request<{ rules: unknown[] }>(`/projects/${encodeURIComponent(project)}/replication`).then(
+    request<{ rules: ReplicationRuleSummary[] }>(`/projects/${encodeURIComponent(project)}/replication`).then(
       (r) => r.rules,
     ),
+
+  /** What each run copied, newest first. */
+  executions: (project: string, limit = 50) =>
+    request<{ executions: ReplicationExecution[] }>(
+      `/projects/${encodeURIComponent(project)}/executions?limit=${limit}`,
+    ).then((r) => r.executions),
 
   createReplicationRule: (project: string, input: Record<string, unknown>) =>
     request<{ id: string }>(`/projects/${encodeURIComponent(project)}/replication`, {
