@@ -3,6 +3,7 @@ import type { RateLimiterObject } from "../durable-objects/rate-limiter.js";
 import { flag, integer, type Env } from "../env.js";
 import { clientAddress, verifiesPassword } from "../rate-limit.js";
 import type { ApiContext, ApiEnv, ApiMiddleware } from "./context.js";
+import { problemResponse, rateLimited, toProblem } from "./problem.js";
 
 const WINDOW_MS = 60_000;
 
@@ -80,7 +81,10 @@ export class DurableObjectStore implements Store {
 const enabled = (env: Env, perMinute: number): boolean => flag(env.RATE_LIMIT_ENABLED, true) && perMinute > 0;
 
 /**
- * Refuses in the `{ error, message }` shape the rest of the management API uses.
+ * Refuses with the problem document the rest of the management API refuses with.
+ *
+ * The limiter answers from its own handler rather than by throwing, so this is
+ * the one refusal `onError` never sees, and the one that has to render itself.
  *
  * `RateLimit-*` is already on the response when the address limiter is the one
  * refusing; `Retry-After` is set here so it is present whichever limiter bites.
@@ -90,9 +94,8 @@ function refuse(c: ApiContext): Response {
   const seconds =
     resetTime === undefined ? 60 : Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000));
 
-  return c.json({ error: "rate_limited", message: `too many requests; retry in ${seconds} seconds` }, 429, {
-    "Retry-After": String(seconds),
-  });
+  const problem = rateLimited(`too many requests; retry in ${seconds} seconds`);
+  return problemResponse(toProblem(problem, c.req.path), { "Retry-After": String(seconds) });
 }
 
 interface LimiterOptions {

@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { actorOf } from "../../audit/store.js";
 import { hashPassword } from "../../auth/password.js";
 import { principalOf, storesOf, type ApiContext, type ApiEnv } from "../context.js";
-import { badRequest, conflict, forbidden, notFound, requireAdmin, requireUser } from "../errors.js";
-import { adminOnly, guard } from "../guard.js";
+import { adminOnly, guard, requireAdmin, requireUser } from "../guard.js";
 import { describe } from "../openapi.js";
+import { badRequest, conflict, forbidden, notFound } from "../problem.js";
 import { CreateUserBody, IdParam, UpdateUserBody, UserSummarySchema, listOf } from "../schemas.js";
 import { jsonBody, validate } from "../validate.js";
 

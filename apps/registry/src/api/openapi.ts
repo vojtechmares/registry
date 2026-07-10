@@ -1,7 +1,8 @@
 import type { MiddlewareHandler } from "hono";
 import { describeRoute, resolver, type DescribeRouteOptions } from "hono-openapi";
 import type { GenericSchema } from "valibot";
-import { ApiErrorSchema } from "./schemas.js";
+import { PROBLEM_MEDIA_TYPE } from "./problem.js";
+import { ProblemSchema } from "./schemas.js";
 
 type Responses = NonNullable<DescribeRouteOptions["responses"]>;
 type ResponseEntry = Responses[string];
@@ -27,7 +28,11 @@ function jsonBody(schema: GenericSchema, description: string) {
   return { description, content: { "application/json": { schema: resolver(schema) } } };
 }
 
-const error = (description: string) => jsonBody(ApiErrorSchema, description);
+/** Every refusal is an RFC 9457 problem document, under the media type the RFC registers. */
+const error = (description: string) => ({
+  description,
+  content: { [PROBLEM_MEDIA_TYPE]: { schema: resolver(ProblemSchema) } },
+});
 
 export interface RouteSpec {
   readonly summary: string;

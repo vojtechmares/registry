@@ -2,9 +2,9 @@ import type { ProjectSettings } from "@registry/api-contract";
 import { Hono } from "hono";
 import { tokenProjectPin, viewerOf } from "../../auth/principal.js";
 import { principalOf, storesOf, type ApiEnv } from "../context.js";
-import { badRequest, conflict, forbidden, notFound, requireUser } from "../errors.js";
-import { humanOnly } from "../guard.js";
+import { humanOnly, requireUser } from "../guard.js";
 import { describe } from "../openapi.js";
+import { badRequest, conflict, forbidden, notFound } from "../problem.js";
 import {
   AddMemberBody,
   CleanupEventSchema,

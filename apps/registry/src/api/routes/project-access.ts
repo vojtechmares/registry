@@ -4,8 +4,8 @@ import { actorOf, type AuditEntry } from "../../audit/store.js";
 import type { Identity, Principal } from "../../auth/principal.js";
 import { tokenProjectPin } from "../../auth/principal.js";
 import { principalOf, storesOf, type ApiContext, type ApiMiddleware } from "../context.js";
-import { forbidden, requireUser } from "../errors.js";
-import { guard } from "../guard.js";
+import { guard, requireUser } from "../guard.js";
+import { forbidden } from "../problem.js";
 
 /**
  * Who may change a project.

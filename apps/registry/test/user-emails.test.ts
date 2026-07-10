@@ -9,7 +9,7 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { UserSummary } from "@registry/api-contract";
-import { basic, call, seedUser } from "./helpers.js";
+import { basic, call, detail, seedUser } from "./helpers.js";
 
 const ADMIN = { id: "ue-root", username: "ueroot", password: "correct-horse-battery" };
 const ALICE = { id: "ue-alice", username: "uealice", password: "alice-password-1234" };
@@ -39,8 +39,7 @@ describe("creating a user", () => {
   it("requires an email address", async () => {
     const response = await create({ username: "noemail", password: "a-long-password" });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { message: string };
-    expect(body.message).toContain("email is required");
+    expect(await detail(response)).toContain("email is required");
   });
 
   it("refuses something that is not an address", async () => {

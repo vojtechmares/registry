@@ -1,8 +1,8 @@
 import type { ReplicationExecution, ReplicationRuleSummary } from "@registry/api-contract";
 import { Hono } from "hono";
 import { enqueueReplication, storesOf, type ApiEnv } from "../context.js";
-import { badRequest, notFound } from "../errors.js";
 import { describe } from "../openapi.js";
+import { badRequest, notFound } from "../problem.js";
 import {
   CreateReplicationRuleBody,
   LimitQuery,

@@ -11,7 +11,7 @@ import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { CreatedAccessToken, ProjectAccessToken } from "@registry/api-contract";
 import { formatAccessToken, hashTokenSecret } from "../src/auth/password.js";
-import { basic, call, seedMember, seedProject, seedRepository, seedUser } from "./helpers.js";
+import { basic, call, detail, seedMember, seedProject, seedRepository, seedUser } from "./helpers.js";
 
 const ADMIN = { id: "pt-root", username: "ptroot", password: "correct-horse-battery" };
 const ALICE = { id: "pt-alice", username: "ptalice", password: "alice-password-1234" };
@@ -112,8 +112,7 @@ describe("POST /tokens, the flat endpoint", () => {
       body: JSON.stringify({ name: "global", scopes: [{ repository: "*", actions: ["pull", "push"] }] }),
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { message: string };
-    expect(body.message).toContain("project is required");
+    expect(await detail(response)).toContain("project is required");
   });
 
   it("refuses it even for an administrator, who used to be allowed", async () => {

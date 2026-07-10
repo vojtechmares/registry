@@ -51,19 +51,57 @@ describe("api client", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/v1/repositories/a/b/manifests/sha256%3Aabc");
   });
 
-  it("turns an error body into an ApiError carrying the status", async () => {
-    mockFetch({ status: 403, body: { error: "forbidden", message: "nope" } });
+  it("turns a problem document into an ApiError carrying the status", async () => {
+    mockFetch({
+      status: 403,
+      body: {
+        type: "https://registry.mareshq.com/problems/forbidden",
+        title: "Forbidden",
+        status: 403,
+        detail: "nope",
+        instance: "/api/v1/stats",
+      },
+    });
 
     await expect(api.stats()).rejects.toBeInstanceOf(ApiError);
-    await expect(api.stats()).rejects.toMatchObject({ status: 403, code: "forbidden", message: "nope" });
+    await expect(api.stats()).rejects.toMatchObject({
+      status: 403,
+      type: "https://registry.mareshq.com/problems/forbidden",
+      title: "Forbidden",
+      // The `detail` is the sentence a person is shown, so it is what `message` holds.
+      message: "nope",
+    });
   });
 
   it("recognises an unauthenticated response", async () => {
-    mockFetch({ status: 401, body: { error: "unauthorized", message: "authentication required" } });
+    mockFetch({
+      status: 401,
+      body: {
+        type: "https://registry.mareshq.com/problems/unauthorized",
+        title: "Authentication required",
+        status: 401,
+        detail: "authentication required",
+        instance: "/api/v1/auth/session",
+      },
+    });
 
     const error = await api.session().catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).isUnauthenticated).toBe(true);
+  });
+
+  /**
+   * A refusal that never reached the Worker - a proxy's HTML page, a dropped
+   * connection - is still a refusal the dashboard has to report. The status is
+   * what it acts on, so a body it cannot read must not become a parse error.
+   */
+  it("still raises an ApiError when the body is not a problem document", async () => {
+    mockFetch({ status: 502, text: "<html>Bad Gateway</html>" });
+
+    const error = await api.stats().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(502);
+    expect((error as ApiError).type).toBe("about:blank");
   });
 
   it("tolerates a 204 with no body", async () => {

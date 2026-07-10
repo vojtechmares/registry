@@ -25,6 +25,7 @@ import type {
   ManifestDetail,
   NotificationDelivery,
   NotificationPolicySummary,
+  ProblemDetails,
   ProjectDetail,
   ProjectSummary,
   RegistryStats,
@@ -390,7 +391,28 @@ export type CreateReplicationRuleInput = v.InferOutput<typeof CreateReplicationR
 
 const timestamp = v.number();
 
-export const ApiErrorSchema = v.object({ error: v.string(), message: v.string() });
+/**
+ * A refusal, as RFC 9457 describes one. `errors` names the fields a validator
+ * rejected; `code` carries the distribution spec's own identifier for a refusal
+ * that came from the authorization code the two planes share.
+ */
+export const ProblemSchema = v.object({
+  type: v.string(),
+  title: v.string(),
+  status: v.number(),
+  detail: v.string(),
+  instance: v.string(),
+  errors: v.exactOptional(
+    v.array(
+      v.object({
+        detail: v.string(),
+        pointer: v.exactOptional(v.string()),
+        parameter: v.exactOptional(v.string()),
+      }),
+    ),
+  ),
+  code: v.exactOptional(v.string()),
+});
 
 export const SessionUserSchema = v.object({
   id: v.string(),
@@ -672,6 +694,7 @@ type Describes<Schema extends v.GenericSchema, Contract> =
 type Assert<Check extends true> = Check;
 
 export type ContractChecks = [
+  Assert<Describes<typeof ProblemSchema, ProblemDetails>>,
   Assert<Describes<typeof SessionUserSchema, SessionUser>>,
   Assert<Describes<typeof AuthProvidersSchema, AuthProviders>>,
   Assert<Describes<typeof RegistryStatsSchema, RegistryStats>>,

@@ -4,9 +4,9 @@ import { Hono } from "hono";
 import { actorOf } from "../../audit/store.js";
 import { tokenProjectPin, viewerOf } from "../../auth/principal.js";
 import { authorizeFor, principalOf, storesOf, type ApiContext, type ApiEnv } from "../context.js";
-import { forbidden, notFound } from "../errors.js";
 import { guard } from "../guard.js";
 import { describe } from "../openapi.js";
+import { forbidden, notFound } from "../problem.js";
 import {
   LifecyclePolicyBody,
   LifecyclePolicySchema,

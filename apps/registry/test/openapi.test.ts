@@ -89,6 +89,37 @@ describe("the OpenAPI document", () => {
     }
   });
 
+  /**
+   * A client that reads `application/json` off a refusal and finds a problem
+   * document has been misled by the document, not by the API.
+   */
+  it("declares every refusal as a problem document, never as plain JSON", async () => {
+    const { paths } = await spec();
+
+    for (const [path, methods] of Object.entries(paths)) {
+      for (const [method, operation] of Object.entries(methods)) {
+        for (const [status, response] of Object.entries(operation.responses)) {
+          if (Number(status) < 400) continue;
+
+          const where = `${method.toUpperCase()} ${path} -> ${status}`;
+          const content = (response as { content?: Record<string, unknown> }).content ?? {};
+          expect(Object.keys(content), where).toEqual(["application/problem+json"]);
+        }
+      }
+    }
+  });
+
+  it("describes the members a problem document carries", async () => {
+    const { paths } = await spec();
+    const refusal = paths["/api/v1/audit"]?.get?.responses["401"] as {
+      content: Record<string, { schema: { properties?: Record<string, unknown>; required?: string[] } }>;
+    };
+
+    const schema = refusal.content["application/problem+json"]?.schema;
+    expect(schema?.required?.toSorted()).toEqual(["detail", "instance", "status", "title", "type"]);
+    expect(schema?.properties).toHaveProperty("errors");
+  });
+
   it("marks the sign-in routes public and everything else authenticated", async () => {
     const { paths } = await spec();
     expect(paths["/api/v1/auth/login"]?.post?.security).toBeUndefined();
@@ -147,9 +178,16 @@ describe("Swagger UI", () => {
 });
 
 describe("unknown management routes", () => {
-  it("answer in the shape the dashboard parses", async () => {
+  it("answer with the problem document the dashboard parses", async () => {
     const response = await call("GET", "/api/v1/nonexistent");
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "not_found", message: "not found" });
+    expect(response.headers.get("Content-Type")).toBe("application/problem+json");
+    expect(await response.json()).toEqual({
+      type: "https://registry.mareshq.com/problems/not-found",
+      title: "Not found",
+      status: 404,
+      detail: "not found",
+      instance: "/api/v1/nonexistent",
+    });
   });
 });

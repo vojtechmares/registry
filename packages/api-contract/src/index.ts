@@ -172,9 +172,44 @@ export interface LifecyclePolicy {
   readonly untaggedTtlDays: number | null;
 }
 
-export interface ApiErrorBody {
-  readonly error: string;
-  readonly message: string;
+/**
+ * One field a validator refused, as RFC 9457's own worked example spells it.
+ *
+ * `pointer` is a JSON Pointer into the request body, where `""` names the body
+ * itself. A fault in the query string or the path has no document to point
+ * into, so it names the parameter instead. Never both, and neither when the
+ * validator could not say which field it meant.
+ */
+export interface ProblemFieldError {
+  readonly detail: string;
+  readonly pointer?: string;
+  readonly parameter?: string;
+}
+
+/**
+ * Every refusal the management API makes, as an RFC 9457 problem document,
+ * served as `application/problem+json`.
+ *
+ * `type` identifies the problem and is the thing to branch on: it is a URI, but
+ * an identifier rather than an address, and it is the same string whichever host
+ * serves the API. `title` summarises that type and never varies. `detail`
+ * describes this one occurrence and is the sentence a person is shown.
+ * `instance` is the path that produced it.
+ */
+export interface ProblemDetails {
+  readonly type: string;
+  readonly title: string;
+  readonly status: number;
+  readonly detail: string;
+  readonly instance: string;
+  /** Present when a body, query or path failed validation. One entry per field. */
+  readonly errors?: readonly ProblemFieldError[];
+  /**
+   * The distribution-spec error code, when the refusal came from the
+   * authorization code the two planes share. It is what `/v2` would have
+   * answered with for the same refusal.
+   */
+  readonly code?: string;
 }
 
 /** The kinds of thing an audit event can be about. */

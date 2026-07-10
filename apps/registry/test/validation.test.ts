@@ -1,9 +1,10 @@
 /**
  * What valibot refuses, and what it says when it does.
  *
- * The management API's error body is `{ error, message }`, and the dashboard
- * shows the message to a person. These pin the sentences the schemas produce,
- * and the content-type guard that keeps a mutation out of a hostile page's reach.
+ * A refusal is an RFC 9457 problem document, whose `detail` the dashboard shows
+ * to a person. These pin the sentences the schemas produce, the `errors` entries
+ * that name the fields those sentences are about, and the content-type guard
+ * that keeps a mutation out of a hostile page's reach.
  */
 
 import { env } from "cloudflare:test";
@@ -11,7 +12,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import * as v from "valibot";
 import { AuditQuery, LimitQuery, WindowQuery } from "../src/api/schemas.js";
 import { describeIssue } from "../src/api/validate.js";
-import { basic, call, seedProject, seedUser } from "./helpers.js";
+import { basic, call, problem, seedProject, seedUser } from "./helpers.js";
 
 const ADMIN = { id: "val-root", username: "valroot", password: "correct-horse-battery" };
 const auth = basic(ADMIN.username, ADMIN.password);
@@ -22,7 +23,7 @@ beforeAll(async () => {
 });
 
 async function message(response: Response): Promise<string> {
-  return ((await response.json()) as { message: string }).message;
+  return (await problem(response)).detail;
 }
 
 /** The sentence valibot's first complaint about `input` turns into. */
@@ -120,6 +121,60 @@ describe("the messages the dashboard shows", () => {
     const response = await call("POST", "/api/v1/users", { headers: json, body: "{not json" });
     expect(response.status).toBe(400);
     expect(await message(response)).toBe("body is not valid JSON");
+  });
+});
+
+/**
+ * `errors`, the extension member RFC 9457 gives as its own worked example.
+ *
+ * The `detail` above is one sentence for a person; this is the machine-readable
+ * companion, so a form can mark the field each complaint belongs to instead of
+ * parsing a sentence for it.
+ */
+describe("every field at fault is named, not only the first", () => {
+  it("points a JSON Pointer at each field the body got wrong", async () => {
+    const response = await call("POST", "/api/v1/users", {
+      headers: json,
+      body: JSON.stringify({ password: "short" }),
+    });
+    expect(response.status).toBe(400);
+
+    expect((await problem(response)).errors).toEqual([
+      { detail: "is required", pointer: "/username" },
+      { detail: "must be at least 12 characters", pointer: "/password" },
+      { detail: "is required", pointer: "/email" },
+    ]);
+  });
+
+  it("reaches into an array to point at the rule that was wrong", async () => {
+    await seedProject({ name: "valptr" });
+    const response = await call("PUT", "/api/v1/projects/valptr/cleanup", {
+      headers: json,
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        rules: [
+          { repositories: "*", tags: {}, keepLast: 1, keepWithinDays: null },
+          { repositories: "*", tags: { semver: "garbage" }, keepLast: 1, keepWithinDays: null },
+        ],
+      }),
+    });
+    expect(response.status).toBe(400);
+
+    const [issue] = (await problem(response)).errors ?? [];
+    expect(issue?.pointer).toBe("/rules/1/tags/semver");
+  });
+
+  /** A query string is not a document, so there is nothing to point into. */
+  it("names a query parameter rather than pointing into a body it has not got", async () => {
+    const response = await call("GET", "/api/v1/audit?resourceType=blob", {
+      headers: { Authorization: auth },
+    });
+    expect(response.status).toBe(400);
+
+    expect((await problem(response)).errors).toEqual([
+      { detail: "is not an audited resource type", parameter: "resourceType" },
+    ]);
   });
 });
 

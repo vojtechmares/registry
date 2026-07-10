@@ -13,7 +13,7 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { formatAccessToken, hashTokenSecret } from "../src/auth/password.js";
-import { basic, call, seedMember, seedProject, seedRepository, seedUser } from "./helpers.js";
+import { basic, call, problem, seedMember, seedProject, seedRepository, seedUser } from "./helpers.js";
 
 const ADMIN = { id: "cp-root", username: "cproot", password: "correct-horse-battery" };
 const PROJECT = "cpacme";
@@ -131,7 +131,7 @@ describe("a machine token cannot reach the control plane", () => {
 
     // 403, never a 400 that reveals the schema and never a 2xx that performs it.
     expect(response.status).toBe(403);
-    expect((await response.json()) as { error: string }).toMatchObject({ error: "forbidden" });
+    expect(await problem(response)).toMatchObject({ type: expect.stringMatching(/\/forbidden$/) });
   });
 
   it("changed nothing while trying", async () => {

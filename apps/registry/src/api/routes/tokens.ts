@@ -5,9 +5,9 @@ import { actorOf } from "../../audit/store.js";
 import { formatAccessToken, generateTokenSecret, hashTokenSecret } from "../../auth/password.js";
 import type { Scope } from "../../auth/scopes.js";
 import { authorizeFor, principalOf, storesOf, type ApiContext, type ApiEnv } from "../context.js";
-import { badRequest, forbidden, notFound, requireUser } from "../errors.js";
-import { humanOnly } from "../guard.js";
+import { humanOnly, requireUser } from "../guard.js";
 import { describe } from "../openapi.js";
+import { badRequest, forbidden, notFound } from "../problem.js";
 import {
   AccessTokenSummarySchema,
   CreateTokenBody,

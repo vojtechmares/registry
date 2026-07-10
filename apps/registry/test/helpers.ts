@@ -1,4 +1,5 @@
 import { SELF, env } from "cloudflare:test";
+import type { ProblemDetails } from "@registry/api-contract";
 import { type Role, projectOf } from "@registry/projects";
 import { hashPassword } from "../src/auth/password.js";
 
@@ -65,6 +66,16 @@ export async function seedUser(options: SeedUserOptions): Promise<void> {
 export async function errorCode(response: Response): Promise<string> {
   const body = (await response.json()) as { errors: Array<{ code: string }> };
   return body.errors[0]!.code;
+}
+
+/** The RFC 9457 problem document every management API refusal carries. */
+export async function problem(response: Response): Promise<ProblemDetails> {
+  return (await response.json()) as ProblemDetails;
+}
+
+/** What a refusal says about this occurrence, which is what the dashboard shows. */
+export async function detail(response: Response): Promise<string> {
+  return (await problem(response)).detail;
 }
 
 export interface SeedProjectOptions {

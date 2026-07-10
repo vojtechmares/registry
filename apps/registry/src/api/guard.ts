@@ -1,5 +1,35 @@
+import type { Identity, Principal } from "../auth/principal.js";
 import { principalOf, type ApiContext, type ApiMiddleware } from "./context.js";
-import { requireAdmin, requireIdentity, requireUser } from "./errors.js";
+import { forbidden, unauthenticated } from "./problem.js";
+
+export function requireIdentity(principal: Principal): Identity {
+  if (principal.kind === "anonymous") throw unauthenticated();
+  return principal.identity;
+}
+
+/**
+ * The control plane - accounts, tokens, project settings - is reachable only by
+ * a signed-in human, never by a machine token.
+ *
+ * A machine token is a data-plane credential: it exists to pull and push within
+ * a declared set of scopes. Were the control-plane guards to check only
+ * `isAdmin`, a narrow token minted by an administrator could create a fresh
+ * admin user, or make itself an owner of every project, and escalate straight
+ * past its own confinement.
+ */
+export function requireUser(principal: Principal): Identity {
+  const identity = requireIdentity(principal);
+  if (principal.kind === "token") {
+    throw forbidden("access tokens may not manage accounts, tokens, or project settings");
+  }
+  return identity;
+}
+
+export function requireAdmin(principal: Principal): Identity {
+  const identity = requireUser(principal);
+  if (!identity.isAdmin) throw forbidden("administrator privileges are required");
+  return identity;
+}
 
 /**
  * Authorization, as middleware, so it runs before the validators.

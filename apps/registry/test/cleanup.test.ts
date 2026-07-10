@@ -11,7 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { CleanupRule } from "@registry/api-contract";
 import { runDueCleanups } from "../src/lifecycle/cleanup.js";
 import { CleanupStore } from "../src/storage/cleanup.js";
-import { basic, call, seedProject, seedRepository, seedUser } from "./helpers.js";
+import { basic, call, detail, seedProject, seedRepository, seedUser } from "./helpers.js";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-07-10T00:00:00Z");
@@ -285,8 +285,7 @@ describe("the cleanup policy API", () => {
       }),
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { message: string };
-    expect(body.message).toContain("semver");
+    expect(await detail(response)).toContain("semver");
   });
 
   it("refuses a rule whose regex will not compile, naming the offset", async () => {
@@ -300,9 +299,9 @@ describe("the cleanup policy API", () => {
       }),
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { message: string };
-    expect(body.message).toContain("tags.regex");
-    expect(body.message).toContain("offset");
+    const text = await detail(response);
+    expect(text).toContain("tags.regex");
+    expect(text).toContain("offset");
   });
 
   it("refuses a rule whose regex a backtracking engine could not run safely", async () => {
@@ -331,7 +330,7 @@ describe("the cleanup policy API", () => {
       }),
     });
     expect(response.status).toBe(400);
-    expect(((await response.json()) as { message: string }).message).toContain("at most 32 rules");
+    expect(await detail(response)).toContain("at most 32 rules");
   });
 
   it("accepts and stores a rule that selects by regex", async () => {

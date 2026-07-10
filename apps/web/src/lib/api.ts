@@ -9,6 +9,7 @@ import type {
   ManifestDetail,
   NotificationDelivery,
   NotificationPolicySummary,
+  ProblemDetails,
   ProjectAccessToken,
   ProjectDetail,
   ProjectSettings,
@@ -35,15 +36,24 @@ import type {
  * deliberately invisible to this code.
  */
 
+/**
+ * A refusal, read out of the RFC 9457 problem document the API answers with.
+ *
+ * `message` is the problem's `detail`: the sentence about this one occurrence,
+ * and the only part meant for a person. `type` is the stable identifier to
+ * branch on, though the status usually says enough.
+ */
 export class ApiError extends Error {
   readonly status: number;
-  readonly code: string;
+  readonly type: string;
+  readonly title: string;
 
-  constructor(status: number, code: string, message: string) {
-    super(message);
+  constructor(status: number, type: string, title: string, detail: string) {
+    super(detail);
     this.name = "ApiError";
     this.status = status;
-    this.code = code;
+    this.type = type;
+    this.title = title;
   }
 
   get isUnauthenticated(): boolean {
@@ -53,6 +63,44 @@ export class ApiError extends Error {
 
 const BASE = "/api/v1";
 
+/**
+ * The problem document, as far as it can be trusted.
+ *
+ * A refusal that never reached the Worker - a proxy's HTML error page, an empty
+ * body from a dropped connection - is still a refusal the dashboard has to
+ * report, so a body that is not a problem document yields nothing rather than
+ * throwing over it. The status is what the dashboard acts on either way.
+ */
+function problemOf(text: string): Partial<ProblemDetails> {
+  let parsed: unknown;
+  try {
+    parsed = text === "" ? null : JSON.parse(text);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object") return {};
+
+  const { type, title, detail } = parsed as Record<string, unknown>;
+  return {
+    ...(typeof type === "string" ? { type } : {}),
+    ...(typeof title === "string" ? { title } : {}),
+    ...(typeof detail === "string" ? { detail } : {}),
+  };
+}
+
+function errorOf(response: Response, text: string): ApiError {
+  const problem = problemOf(text);
+  const fallback =
+    response.statusText === "" ? `Request failed with status ${response.status}` : response.statusText;
+
+  return new ApiError(
+    response.status,
+    problem.type ?? "about:blank",
+    problem.title ?? fallback,
+    problem.detail ?? fallback,
+  );
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
@@ -60,7 +108,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     // would silently log the dashboard out.
     credentials: "same-origin",
     headers: {
-      Accept: "application/json",
+      Accept: "application/json, application/problem+json",
       ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
       ...init.headers,
     },
@@ -69,14 +117,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const text = await response.text();
-  const body: unknown = text === "" ? {} : JSON.parse(text);
+  if (!response.ok) throw errorOf(response, text);
 
-  if (!response.ok) {
-    const { error, message } = body as { error?: string; message?: string };
-    throw new ApiError(response.status, error ?? "error", message ?? response.statusText);
-  }
-
-  return body as T;
+  return (text === "" ? {} : JSON.parse(text)) as T;
 }
 
 /** Repository names contain slashes that must survive as path separators. */

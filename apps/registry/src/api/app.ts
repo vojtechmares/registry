@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { generateSpecs } from "hono-openapi";
 import type { Env } from "../env.js";
 import { PREFIX, authenticate, withStores, type ApiEnv } from "./context.js";
-import { notFoundHandler, onError } from "./errors.js";
+import { notFoundHandler, onError } from "./problem.js";
 import { rateLimiters } from "./rate-limit.js";
 import { SECURITY_SCHEMES } from "./openapi.js";
 import { auth } from "./routes/auth.js";
@@ -32,6 +32,14 @@ The dashboard's session cookie and \`Authorization: Basic\` reach both.
 authenticated principal. Requests that may verify a password are metered a third
 time, on a stricter allowance of their own. A refusal is a \`429\` with
 \`Retry-After\`.
+
+**Errors.** Every refusal is a problem document, as described by
+[RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), served as
+\`application/problem+json\`. Branch on \`type\`: it identifies the problem, and
+is the same string whichever host serves this API. \`title\` summarises that type
+and never varies; \`detail\` describes the one occurrence, and is the sentence to
+show a person. A request refused by validation also carries \`errors\`, one entry
+per field, each pointing at what was sent.
 `.trim();
 
 /**

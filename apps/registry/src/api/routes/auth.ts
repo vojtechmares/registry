@@ -13,8 +13,9 @@ import {
 import { clearSessionCookie, createSessionCookie } from "../../auth/session.js";
 import { configOf, principalOf, storesOf, type ApiEnv } from "../context.js";
 import { normalizeEmail } from "../email.js";
-import { notFound, requireIdentity, requireUser } from "../errors.js";
+import { requireIdentity, requireUser } from "../guard.js";
 import { describe } from "../openapi.js";
+import { notFound } from "../problem.js";
 import { AuthProvidersSchema, LoginBody, SessionUserSchema } from "../schemas.js";
 import { jsonBody, validate } from "../validate.js";
 

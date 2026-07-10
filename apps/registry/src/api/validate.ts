@@ -1,15 +1,16 @@
+import type { ProblemFieldError } from "@registry/api-contract";
 import type { Env, MiddlewareHandler, ValidationTargets } from "hono";
 import { validator as honoValidator } from "hono-openapi";
 import type { BaseIssue, BaseSchema, InferOutput } from "valibot";
-import { badRequest } from "./errors.js";
+import { badRequest } from "./problem.js";
 
 /**
  * One valibot issue, in the shape valibot actually produces.
  *
  * `@hono/standard-validator` hands the hook `StandardSchemaV1.Issue`, which
  * promises only `message` and `path`. Every field read here is part of
- * valibot's own issue, and the narrowing is checked at runtime by
- * `describeIssue` before it relies on any of them.
+ * valibot's own issue, and the narrowing is checked at runtime by `issueOf`
+ * before anything relies on it.
  */
 interface Issue {
   readonly kind: string;
@@ -19,10 +20,16 @@ interface Issue {
   readonly path?: ReadonlyArray<{ readonly key?: unknown }> | undefined;
 }
 
-/** `rules.0.tags.regex`, the field the issue is about, or `""` for the body itself. */
-function dotPath(issue: Issue): string {
-  if (issue.path === undefined) return "";
-  return issue.path.map((segment) => String(segment.key)).join(".");
+/** The issue, when it is one of valibot's. Null when the validator produced something else. */
+function issueOf(raw: { readonly message: string }): Issue | null {
+  const issue = raw as Issue;
+  return typeof issue.kind === "string" ? issue : null;
+}
+
+/** `["rules", "0", "tags", "regex"]`, the field the issue is about, or `[]` for the body itself. */
+function pathOf(issue: Issue): readonly string[] {
+  if (issue.path === undefined) return [];
+  return issue.path.map((segment) => String(segment.key));
 }
 
 /**
@@ -46,21 +53,51 @@ function isMissing(issue: Issue): boolean {
  * worse than "email is required" and the dashboard shows this text verbatim.
  */
 export function describeIssue(raw: { readonly message: string }): string {
-  const issue = raw as Issue;
-  if (typeof issue.kind !== "string") return issue.message;
+  const issue = issueOf(raw);
+  if (issue === null) return raw.message;
 
-  const path = dotPath(issue);
+  const path = pathOf(issue).join(".");
   if (isMissing(issue)) return path === "" ? issue.message : `${path} is required`;
   return path === "" ? issue.message : `${path}: ${issue.message}`;
+}
+
+/** RFC 6901: `~` and `/` are the only two characters a JSON Pointer must escape. */
+function pointerOf(path: readonly string[]): string {
+  return path.map((segment) => `/${segment.replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
+}
+
+/**
+ * One complaint, as an entry in the problem document's `errors`.
+ *
+ * This is the shape RFC 9457 gives as its own worked example: a `detail` per
+ * field, and a JSON Pointer naming the field within the body - where the empty
+ * pointer names the body itself, which is where a complaint with no path
+ * belongs. A query string or a path has no document to point into, so the fault
+ * names its parameter instead.
+ *
+ * The detail here does not repeat the field name the way `describeIssue` does:
+ * the pointer already says which field, and `"is required"` beside `/email` is
+ * what the RFC's example reads like.
+ */
+function fieldError(target: keyof ValidationTargets, raw: { readonly message: string }): ProblemFieldError {
+  const issue = issueOf(raw);
+  if (issue === null) return { detail: raw.message };
+
+  const detail = isMissing(issue) ? "is required" : issue.message;
+  const path = pathOf(issue);
+
+  if (target === "json") return { detail, pointer: pointerOf(path) };
+  return path.length === 0 ? { detail } : { detail, parameter: path.join(".") };
 }
 
 /**
  * `validator`, but failing the way the rest of the management API fails.
  *
  * Without a hook, `hono-openapi` answers a bad body with valibot's raw issue
- * array, which is neither the `{ error, message }` shape the dashboard parses
- * nor something a person reads. Only the first issue is reported: valibot
- * checks entries in declaration order, so it is the one furthest up the body.
+ * array, which is neither a problem document nor something a person reads. The
+ * `detail` quotes the first issue - valibot checks entries in declaration order,
+ * so it is the one furthest up the body - and every issue is listed under
+ * `errors`, where a form can find the field each one belongs to.
  */
 export function validate<
   Schema extends BaseSchema<unknown, unknown, BaseIssue<unknown>>,
@@ -74,7 +111,14 @@ export function validate<
   { in: { [K in Target]: unknown }; out: { [K in Target]: InferOutput<Schema> } }
 > {
   return honoValidator(target, schema, (result) => {
-    if (!result.success) throw badRequest(describeIssue(result.error[0] ?? { message: "invalid request" }));
+    if (result.success) return;
+
+    const issues = result.error;
+    const first = issues[0] ?? { message: "invalid request" };
+    throw badRequest(
+      describeIssue(first),
+      issues.map((issue) => fieldError(target, issue)),
+    );
   }) as never;
 }
 

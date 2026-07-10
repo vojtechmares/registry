@@ -66,9 +66,14 @@ describe("the address limiter", () => {
     expect(refused.status).toBe(429);
     expect(Number(refused.headers.get("Retry-After"))).toBeGreaterThan(0);
 
-    const body = (await refused.json()) as { error: string; message: string };
-    expect(body.error).toBe("rate_limited");
-    expect(body.message).toContain("retry in");
+    // The limiter answers from its own handler, so it is the one refusal that
+    // never passes through `onError` - and still has to be a problem document.
+    expect(refused.headers.get("Content-Type")).toBe("application/problem+json");
+
+    const body = (await refused.json()) as { type: string; status: number; detail: string };
+    expect(body.type).toMatch(/\/rate-limited$/);
+    expect(body.status).toBe(429);
+    expect(body.detail).toContain("retry in");
   });
 
   it("meters each address on its own budget", async () => {

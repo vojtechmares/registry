@@ -3,8 +3,8 @@ import { isAllowedWebhookUrl } from "@registry/notifications";
 import { Hono } from "hono";
 import { storesOf, type ApiEnv } from "../context.js";
 import { isEmailAddress } from "../email.js";
-import { badRequest, notFound } from "../errors.js";
 import { describe } from "../openapi.js";
+import { badRequest, notFound } from "../problem.js";
 import {
   CreateNotificationBody,
   CreatedNotificationPolicySchema,
