@@ -224,3 +224,75 @@ describe("RemoteRegistry operations", () => {
     expect(await remote.listTags("acme/api")).toEqual([]);
   });
 });
+
+const publicOnly = (url: string) => new URL(url).hostname !== "169.254.169.254";
+
+describe("RemoteRegistry SSRF guard", () => {
+  it("refuses a base URL the guard rejects, at construction", () => {
+    expect(
+      () =>
+        new RemoteRegistry({
+          url: "https://169.254.169.254",
+          guard: publicOnly,
+          fetch: async () => new Response(),
+        }),
+    ).toThrow(/refusing/);
+  });
+
+  it("follows a redirect to a public host, which is how a blob reaches its CDN", async () => {
+    let hop = 0;
+    const fetcher = vi.fn(async () => {
+      hop++;
+      if (hop === 1) {
+        return new Response(null, { status: 302, headers: { Location: "https://cdn.test/blob" } });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Length": "3" } });
+    }) as unknown as typeof fetch;
+
+    const remote = new RemoteRegistry({ url: "https://reg.test", guard: () => true, fetch: fetcher });
+    const blob = await remote.getBlob("acme/api", "sha256:x");
+    expect(blob).not.toBeNull();
+    expect(hop).toBe(2);
+  });
+
+  it("refuses a redirect that points at an internal address", async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(null, { status: 302, headers: { Location: "https://169.254.169.254/latest" } }),
+    ) as unknown as typeof fetch;
+
+    const remote = new RemoteRegistry({ url: "https://reg.test", guard: publicOnly, fetch: fetcher });
+    await expect(remote.getManifest("acme/api", "v1")).rejects.toThrow(/refusing/);
+  });
+
+  it("refuses a token realm that points at an internal address", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === "reg.test") {
+        return new Response(null, {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Bearer realm="https://169.254.169.254/token"' },
+        });
+      }
+      return Response.json({ token: "t" });
+    }) as unknown as typeof fetch;
+
+    const remote = new RemoteRegistry({
+      url: "https://reg.test",
+      credentials: { username: "a", password: "b" },
+      guard: publicOnly,
+      fetch: fetcher,
+    });
+    // The realm fetch is refused, so no token is obtained and the 401 stands.
+    await expect(remote.getManifest("acme/api", "v1")).rejects.toThrow(/refusing/);
+  });
+
+  it("gives up rather than following a redirect loop forever", async () => {
+    const fetcher = vi.fn(
+      async () => new Response(null, { status: 302, headers: { Location: "https://reg.test/again" } }),
+    ) as unknown as typeof fetch;
+
+    const remote = new RemoteRegistry({ url: "https://reg.test", guard: () => true, fetch: fetcher });
+    await expect(remote.getManifest("acme/api", "v1")).rejects.toThrow(/too many redirects/);
+  });
+});

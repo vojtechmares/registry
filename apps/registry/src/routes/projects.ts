@@ -1,6 +1,12 @@
 import type { CleanupRule, ProjectSettings, Visibility } from "@registry/api-contract";
 import { isValidCron } from "@registry/cron";
-import { EVENT_TYPES, type EventType, isAllowedWebhookUrl, isEventType } from "@registry/notifications";
+import {
+  EVENT_TYPES,
+  type EventType,
+  isAllowedWebhookUrl,
+  isEventType,
+  isPublicHttpsUrl,
+} from "@registry/notifications";
 import { isValidRepositoryName } from "@registry/oci";
 import { type Role, canAdminister, isRole, isValidProjectName } from "@registry/projects";
 import type { Direction, Trigger } from "@registry/replication";
@@ -52,6 +58,19 @@ export function viewerOf(principal: Principal): Viewer | null {
   return { id, username, isAdmin };
 }
 
+/**
+ * The project a machine token is pinned to, or null.
+ *
+ * A pinned token acts as its owner but must never see past its own project - so
+ * the listing and visibility routes, which otherwise read the owner's full
+ * view, intersect that view with the pin. Without this a token scoped to one
+ * project could enumerate every repository and project its owner (perhaps an
+ * administrator) can see.
+ */
+export function tokenProjectPin(principal: Principal): string | null {
+  return principal.kind === "token" ? principal.project : null;
+}
+
 function validName(name: string): string {
   if (!isValidProjectName(name)) throw badRequest(`"${name}" is not a valid project name`);
   return name;
@@ -79,6 +98,9 @@ async function requireProjectOwner(ctx: ProjectContext, project: string): Promis
 
 /** Whether the caller may see the project at all. Mirrors the registry's own rule. */
 function canView(principal: Principal, visibility: Visibility, role: Role | null, name: string): boolean {
+  // A pinned token sees nothing outside its project, public or not.
+  const pin = tokenProjectPin(principal);
+  if (pin !== null && pin !== name) return false;
   if (visibility === "public") return true;
   if (principal.kind === "anonymous") return false;
   return principal.identity.isAdmin || principal.identity.username === name || role !== null;
@@ -114,7 +136,13 @@ export async function handleProjects(ctx: ProjectContext, path: string): Promise
   throw notFound();
 }
 
-/** Only https, and only a URL. A rule sends credentials there. */
+/**
+ * A rule sends credentials to this URL and pulls content back from it, so it is
+ * held to the same standard as a webhook target: https, and never an address
+ * that only the registry can reach. The runtime client re-checks the base, its
+ * redirects, and the token realm, but refusing a bad URL here means the owner
+ * finds out when they type it.
+ */
 function validRemoteUrl(raw: unknown): string {
   if (typeof raw !== "string") throw badRequest("remoteUrl is required");
   let url: URL;
@@ -123,7 +151,9 @@ function validRemoteUrl(raw: unknown): string {
   } catch {
     throw badRequest("remoteUrl must be a URL");
   }
-  if (url.protocol !== "https:") throw badRequest("remoteUrl must be https");
+  if (!isPublicHttpsUrl(url.origin)) {
+    throw badRequest("remoteUrl must be an https URL that does not resolve to a private address");
+  }
   return url.origin;
 }
 
@@ -489,7 +519,11 @@ async function projectStats(ctx: ProjectContext, name: string): Promise<Response
 }
 
 async function listProjects(ctx: ProjectContext): Promise<Response> {
-  return Response.json({ projects: await ctx.projects.list(viewerOf(ctx.principal)) });
+  const all = await ctx.projects.list(viewerOf(ctx.principal));
+  // A pinned token sees only its own project, whatever its owner can see.
+  const pin = tokenProjectPin(ctx.principal);
+  const projects = pin === null ? all : all.filter((project) => project.name === pin);
+  return Response.json({ projects });
 }
 
 async function createProject(ctx: ProjectContext): Promise<Response> {

@@ -17,6 +17,20 @@ export const SESSION_PATH = "/api";
 /** Long enough to be usable, short enough that a revoked account loses access. */
 const SESSION_TTL_SECONDS = 60 * 60;
 
+/**
+ * A session cookie's own audience, distinct from the registry's.
+ *
+ * Session cookies and the bearer tokens `/v2/token` hands out are signed with
+ * the same secret and would otherwise be interchangeable - so a machine token
+ * could fetch its bearer JWT and present it as a session cookie, resolving as
+ * the unconfined user behind it and stepping straight past its own scopes. A
+ * dedicated audience makes the two un-swappable: a registry token fails here,
+ * and a session cookie fails on `/v2`.
+ */
+function sessionAudience(config: RegistryConfig): string {
+  return `${config.service}/session`;
+}
+
 export function readSessionCookie(request: Request): string | null {
   const header = request.headers.get("Cookie");
   if (header === null) return null;
@@ -42,7 +56,7 @@ export async function createSessionCookie(
       admin: identity.isAdmin,
       access: [],
       iss: config.issuer,
-      aud: config.service,
+      aud: sessionAudience(config),
       iat: issuedAt,
       nbf: issuedAt,
       exp: issuedAt + SESSION_TTL_SECONDS,
@@ -74,8 +88,15 @@ function cookie(value: string, maxAge: number, secure: boolean): string {
 export async function verifySessionCookie(token: string, config: RegistryConfig): Promise<Identity | null> {
   const claims = await verifyJwt(token, config.jwtSecret, {
     issuer: config.issuer,
-    audience: config.service,
+    audience: sessionAudience(config),
   });
   if (claims === null || claims.sub === "anonymous") return null;
+
+  // Belt to the audience's braces: a registry access token carries a `scopes`
+  // or `project` claim, and one must never be honoured as a session however it
+  // arrived. A genuine session cookie has neither.
+  const confined = claims as { scopes?: unknown; project?: unknown };
+  if (confined.scopes !== undefined || confined.project !== undefined) return null;
+
   return { id: claims.sub, username: claims.name, isAdmin: claims.admin };
 }

@@ -32,7 +32,7 @@ import { TaskQueue } from "../tasks/queue.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
 import { StatsStore } from "../storage/stats.js";
-import { handleProjects, viewerOf, windowDays } from "./projects.js";
+import { handleProjects, tokenProjectPin, viewerOf, windowDays } from "./projects.js";
 import {
   ApiError,
   badRequest,
@@ -323,8 +323,11 @@ async function stats(ctx: Context): Promise<Response> {
 
 async function listRepositories(ctx: Context): Promise<Response> {
   const search = ctx.url.searchParams.get("search");
-  const project = ctx.url.searchParams.get("project");
   const limit = Math.min(Number(ctx.url.searchParams.get("limit") ?? "100") || 100, 500);
+
+  // A pinned token is confined to its project regardless of the query it sends.
+  const pin = tokenProjectPin(ctx.principal);
+  const project = pin ?? ctx.url.searchParams.get("project");
 
   const repositories = await ctx.admin.listRepositories({
     search,
@@ -450,8 +453,11 @@ async function createToken(ctx: Context): Promise<Response> {
   let project: string | null = null;
   if (body.project !== undefined && body.project !== "") {
     if (!isValidProjectName(body.project)) throw badRequest(`"${body.project}" is not a valid project name`);
-    if (!(await ctx.projects.exists(body.project)))
-      throw notFound(`project "${body.project}" does not exist`);
+    // Whether the project exists is not disclosed here: a caller who cannot
+    // grant on it is refused by the scope check below either way, and reporting
+    // "does not exist" would turn this into an existence oracle for guessed
+    // names. A token pinned to a project that does not exist yet simply reaches
+    // nothing until it does.
     project = body.project;
   }
 
@@ -599,7 +605,7 @@ export async function handleCatalog(
   const last = url.searchParams.get("last");
 
   const admin = new AdminStore(env.DB);
-  const page = await admin.catalog(limit, last, viewerOf(principal));
+  const page = await admin.catalog(limit, last, viewerOf(principal), tokenProjectPin(principal));
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (page.hasMore && page.names.length > 0) {

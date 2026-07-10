@@ -101,7 +101,7 @@ describe("completing and failing", () => {
     const queue = new TaskQueue(env.DB);
     const id = await queue.enqueue({ kind: "test", payload: {} }, NOW);
     const [task] = await queue.claim(10, NOW);
-    await queue.complete(task!.id, NOW);
+    await queue.complete(task!, NOW);
     expect((await statusOf(id)).status).toBe("done");
   });
 
@@ -126,6 +126,34 @@ describe("completing and failing", () => {
 
     // And is never claimed again.
     expect(await queue.claim(10, NOW + 86_400_000)).toHaveLength(0);
+  });
+
+  it("ignores a stalled run that finishes after its lease was reclaimed", async () => {
+    const queue = new TaskQueue(env.DB);
+    const id = await queue.enqueue({ kind: "test", payload: {}, maxAttempts: 5 }, NOW);
+
+    // R1 claims (attempts 1), then stalls past its lease.
+    const [r1] = await queue.claim(10, NOW);
+    // A sweep reclaims the expired lease as R2 (attempts 2) and completes it.
+    const later = NOW + 6 * 60 * 1000;
+    const [r2] = await queue.claim(10, later);
+    expect(r2?.attempts).toBe(2);
+    await queue.complete(r2!, later);
+    expect((await statusOf(id)).status).toBe("done");
+
+    // R1 now wakes and reports failure with its stale attempt. It owns nothing,
+    // so the task stays done rather than being resurrected for a third run.
+    await queue.fail(r1!, new Error("late"), later + 1);
+    expect((await statusOf(id)).status).toBe("done");
+
+    // And symmetrically, R1 completing late cannot mask a failure R2 recorded.
+    const other = await queue.enqueue({ kind: "test", payload: {}, maxAttempts: 5 }, NOW);
+    const [a] = await queue.claim(10, NOW);
+    const [b] = await queue.claim(10, NOW + 6 * 60 * 1000);
+    await queue.fail(b!, new Error("real failure"), NOW + 6 * 60 * 1000);
+    await queue.complete(a!, NOW + 6 * 60 * 1000);
+    // b's retry stands; a's late completion is ignored.
+    expect((await statusOf(other)).status).toBe("pending");
   });
 
   it("records the error, truncated", async () => {
@@ -201,7 +229,8 @@ describe("pruning", () => {
     const queue = new TaskQueue(env.DB);
     const done = await queue.enqueue({ kind: "noop", payload: {} }, NOW);
     const pending = await queue.enqueue({ kind: "noop", payload: {} }, NOW);
-    await queue.complete(done, NOW);
+    const claimed = await queue.claimOne(done, NOW);
+    await queue.complete(claimed!, NOW);
 
     const removed = await queue.prune(1000, NOW + 5000);
     expect(removed).toBe(1);

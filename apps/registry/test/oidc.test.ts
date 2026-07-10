@@ -219,14 +219,18 @@ describe("the sign-in flow", () => {
     expect(response.headers.get("Location")).toBe("/admin");
   });
 
-  it("ignores a `next` that points off-origin", async () => {
-    const started = await begin("https://evil.test");
-    pendingToken = await idToken(started.nonce, {
-      sub: `evil|${crypto.randomUUID()}`,
-      preferred_username: "gwen",
-    });
-    const response = await callback(started.state, started.cookie);
-    expect(response.headers.get("Location")).toBe("/");
+  it("ignores a `next` that points off-origin, including the backslash trick", async () => {
+    // `/\evil.test` passes a naive "starts with a slash" check, and an https URL
+    // parser folds the backslash into a slash, so a browser reads it as a host.
+    for (const evil of ["https://evil.test", "//evil.test", "/%5Cevil.test"]) {
+      const started = await begin(evil);
+      pendingToken = await idToken(started.nonce, {
+        sub: `evil|${crypto.randomUUID()}`,
+        preferred_username: "gwen",
+      });
+      const response = await callback(started.state, started.cookie);
+      expect(response.headers.get("Location")).toBe("/");
+    }
   });
 
   it("refuses a callback whose state does not match the flow", async () => {

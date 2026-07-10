@@ -343,4 +343,35 @@ describe("project-scoped tokens", () => {
     const push = await pushBlob("scoped-b/app", deterministic(64, 33), `Bearer ${token}`);
     expect(push.status).toBe(403);
   });
+
+  it("cannot enumerate repositories or projects outside its pin, even with an admin owner", async () => {
+    const secret = await seedToken({
+      id: "projtoken0000005",
+      secret: "w".repeat(43),
+      userId: ADMIN.id,
+      scopes: [{ repository: "*", actions: ["pull", "push"] }],
+      project: "scoped-a",
+    });
+    const tokenAuth = basic("root", secret);
+
+    // The catalog is confined to the pinned project.
+    const catalog = await call("GET", "/v2/_catalog", { headers: { Authorization: tokenAuth } });
+    const { repositories } = (await catalog.json()) as { repositories: string[] };
+    expect(repositories.every((name) => name.startsWith("scoped-a/"))).toBe(true);
+    expect(repositories).not.toContain("scoped-b/app");
+
+    // As is the management repository listing...
+    const repos = await call("GET", "/api/v1/repositories", { headers: { Authorization: tokenAuth } });
+    const list = (await repos.json()) as { repositories: Array<{ name: string }> };
+    expect(list.repositories.every((r) => r.name.startsWith("scoped-a/"))).toBe(true);
+
+    // ...and the project listing.
+    const projects = await call("GET", "/api/v1/projects", { headers: { Authorization: tokenAuth } });
+    const projectList = (await projects.json()) as { projects: Array<{ name: string }> };
+    expect(projectList.projects.map((p) => p.name)).toEqual(["scoped-a"]);
+
+    // A project it is not pinned to is invisible, not merely forbidden.
+    const other = await call("GET", "/api/v1/projects/scoped-b", { headers: { Authorization: tokenAuth } });
+    expect(other.status).toBe(404);
+  });
 });

@@ -202,6 +202,22 @@ describe("require signatures on push", () => {
     const body = manifestBody({ configDigest: await digestOf(config), configSize: config.length });
     expect((await putManifest("nosig/app", "v1", body)).status).toBe(201);
   });
+
+  it("does not let a decoy subject on a runnable image slip it through unsigned", async () => {
+    // A `subject` is legal on any manifest, so a pusher could bolt one on to
+    // masquerade as an exempt attachment. The image is still a runnable image.
+    await seedRepository("sigpush7/app", { name: "sigpush7", requireSignaturePush: true });
+    const config = deterministic(32, 8);
+    const configDigest = await seedBlob("sigpush7/app", config);
+    const body = manifestBody({
+      configDigest,
+      configSize: config.length,
+      subject: { digest: `sha256:${"00".repeat(32)}`, size: 10 },
+    });
+    const response = await putManifest("sigpush7/app", "v1", body);
+    expect(response.status).toBe(403);
+    expect(await errorCode(response)).toBe("DENIED");
+  });
 });
 
 describe("require signatures on pull", () => {
@@ -224,6 +240,54 @@ describe("require signatures on pull", () => {
     await seedProject({ name: "sigpull2", requireSignaturePull: true });
 
     expect((await getManifest("sigpull2/app", image.digest)).status).toBe(200);
+  });
+
+  it("serves a platform child of a signed index, which cosign signs by the index alone", async () => {
+    const repo = "sigpull-multi/app";
+    await seedRepository(repo);
+
+    // Two platform images, pushed by digest (unsigned by-digest is permitted).
+    const amd = await pushImage(repo, 40);
+    const arm = await pushImage(repo, 41);
+
+    // An index over them, and a signature on the index - the cosign default.
+    const indexBody = JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+      manifests: [
+        { mediaType: MANIFEST_TYPE, digest: amd.digest, size: amd.size },
+        { mediaType: MANIFEST_TYPE, digest: arm.digest, size: arm.size },
+      ],
+    });
+    const indexDigest = await digestOf(new TextEncoder().encode(indexBody));
+    expect((await putManifest(repo, indexDigest, indexBody)).status).toBe(201);
+    await signViaReferrers(repo, { digest: indexDigest, size: indexBody.length });
+
+    await seedProject({ name: "sigpull-multi", requireSignaturePull: true });
+
+    // The index pulls, and so does each child by digest - the index's signature
+    // covers them, so a normally-signed multi-arch image is not wrongly blocked.
+    expect((await getManifest(repo, indexDigest)).status).toBe(200);
+    expect((await getManifest(repo, amd.digest)).status).toBe(200);
+    expect((await getManifest(repo, arm.digest)).status).toBe(200);
+  });
+
+  it("does not exempt a child of an unsigned index", async () => {
+    const repo = "sigpull-unsigned/app";
+    await seedRepository(repo);
+    const child = await pushImage(repo, 42);
+
+    const indexBody = JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+      manifests: [{ mediaType: MANIFEST_TYPE, digest: child.digest, size: child.size }],
+    });
+    const indexDigest = await digestOf(new TextEncoder().encode(indexBody));
+    await putManifest(repo, indexDigest, indexBody);
+    await seedProject({ name: "sigpull-unsigned", requireSignaturePull: true });
+
+    // The index is unsigned, so wrapping the child in it must not launder it.
+    expect((await getManifest(repo, child.digest)).status).toBe(403);
   });
 
   it("still serves the signature manifest itself, or nothing could verify anything", async () => {

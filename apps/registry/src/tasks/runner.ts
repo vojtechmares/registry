@@ -18,13 +18,13 @@ export async function runTask(
 ): Promise<boolean> {
   const handler = handlers[task.kind];
   if (handler === undefined) {
-    await queue.fail({ ...task, attempts: task.maxAttempts }, `unknown task kind "${task.kind}"`);
+    await queue.failPermanently(task, `unknown task kind "${task.kind}"`);
     return false;
   }
 
   try {
     await handler(task.payload, env);
-    await queue.complete(task.id);
+    await queue.complete(task);
     return true;
   } catch (error) {
     console.error("task failed", { id: task.id, kind: task.kind, error });

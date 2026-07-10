@@ -110,14 +110,17 @@ export function readFlowCookie(request: Request): string | null {
 }
 
 /**
- * Only a path on this origin, and never a scheme-relative one.
+ * Only a path on this origin, and never one a browser would read as a host.
  *
- * `//evil.test` is a valid URL path to a browser and an open redirect to
- * everyone else, which is exactly the kind of thing a login flow gets used for.
+ * `//evil.test` is a valid URL path to us and an open redirect to a browser,
+ * which is exactly what a login flow gets abused for. So is `/\evil.test`: on
+ * an `https` URL the WHATWG parser folds a backslash into a slash, so the
+ * second character being either `/` or `\` makes the rest a host, not a path.
  */
 export function safeNext(raw: string | null): string {
   if (raw === null || raw === "") return "/";
-  if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
+  if (!raw.startsWith("/")) return "/";
+  if (raw[1] === "/" || raw[1] === "\\") return "/";
   return raw;
 }
 

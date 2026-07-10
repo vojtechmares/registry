@@ -102,6 +102,12 @@ export class ProjectPolicy implements RegistryPolicy {
     // serve that manifest would deny a verifier the very thing it came for.
     if (await this.signatures.isAttachment(repository, record.digest)) return;
 
+    // A platform manifest inside a multi-architecture index is pulled by digest
+    // as part of that index, and `cosign` signs the index digest, not each
+    // child. So a child of a signed index is covered by the index's signature -
+    // otherwise a normally-signed multi-arch image could not be pulled at all.
+    if (await this.signatures.isSignedIndexChild(repository, record.digest)) return;
+
     if (!(await this.signatures.isSigned(repository, record.digest))) {
       throw unsignedArtifact(repository, record.digest, "pulled");
     }

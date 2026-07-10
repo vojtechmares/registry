@@ -137,7 +137,7 @@ export class D1MetadataStore implements MetadataStore {
     return this.db
       .prepare(
         `UPDATE projects
-            SET used_bytes = used_bytes + (SELECT size FROM blobs WHERE digest = ?1),
+            SET used_bytes = used_bytes + COALESCE((SELECT size FROM blobs WHERE digest = ?1), 0),
                 updated_at = ?4
           WHERE name = ?2
             AND (SELECT COUNT(*) FROM repository_blobs WHERE project = ?2 AND digest = ?1) = 1

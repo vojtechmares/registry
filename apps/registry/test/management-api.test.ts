@@ -79,6 +79,23 @@ describe("control plane rejects machine tokens", () => {
     expect(response.headers.get("Set-Cookie")).toBeNull();
   });
 
+  it("will not honour a /v2/token bearer JWT presented as a session cookie", async () => {
+    // The bearer token `/v2/token` hands out is signed with the same secret as a
+    // session cookie. Were it accepted as one, a scoped machine token could
+    // fetch its own bearer JWT and present it back as `registry_session`,
+    // resolving as the unconfined owner and stepping past its own scopes.
+    const exchange = await call("GET", "/v2/token?scope=repository:root/app:pull", {
+      headers: { Authorization: basic("x", adminToken) },
+    });
+    expect(exchange.status).toBe(200);
+    const { token } = (await exchange.json()) as { token: string };
+
+    const response = await call("GET", "/api/v1/auth/session", {
+      headers: { Cookie: `registry_session=${token}` },
+    });
+    expect(response.status).toBe(401);
+  });
+
   it("still admits the human administrator over Basic auth", async () => {
     const response = await call("GET", "/api/v1/stats", {
       headers: { Authorization: basic(ADMIN, ADMIN_PASSWORD) },
@@ -86,6 +103,21 @@ describe("control plane rejects machine tokens", () => {
     expect(response.status).toBe(200);
     const stats = (await response.json()) as { repositories: number };
     expect(typeof stats.repositories).toBe("number");
+  });
+
+  it("still issues a working session cookie for a real login", async () => {
+    // The fix must not break the genuine flow: a password login's cookie is
+    // honoured on the control plane.
+    const login = await call("POST", "/api/v1/auth/login", {
+      headers: json,
+      body: JSON.stringify({ username: ADMIN, password: ADMIN_PASSWORD }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get("Set-Cookie")!.split(";")[0]!;
+
+    const session = await call("GET", "/api/v1/auth/session", { headers: { Cookie: cookie } });
+    expect(session.status).toBe(200);
+    expect(((await session.json()) as { username: string }).username).toBe(ADMIN);
   });
 });
 

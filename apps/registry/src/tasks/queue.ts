@@ -129,17 +129,45 @@ export class TaskQueue {
     };
   }
 
-  async complete(id: string, now = Date.now()): Promise<void> {
+  /**
+   * Closes a task, but only if this run still owns it.
+   *
+   * The `attempts` fence is what makes a lease safe. A run whose lease expired
+   * has already been reclaimed as a new attempt with a higher `attempts`, so its
+   * late `complete` matches nothing and is ignored - otherwise a stalled run
+   * finishing after its replacement could mark done a task the replacement had
+   * failed, or the other way round, and a non-idempotent webhook or push would
+   * fire twice.
+   */
+  async complete(task: Task, now = Date.now()): Promise<void> {
     await this.db
-      .prepare("UPDATE tasks SET status = 'done', lease_until = NULL, updated_at = ? WHERE id = ?")
-      .bind(now, id)
+      .prepare(
+        `UPDATE tasks SET status = 'done', lease_until = NULL, updated_at = ?
+          WHERE id = ? AND status = 'running' AND attempts = ?`,
+      )
+      .bind(now, task.id, task.attempts)
       .run();
   }
 
   /**
-   * Records a failure. Schedules a retry while attempts remain, and gives up
-   * once they do not - a task that can never succeed must stop consuming the
-   * sweep's budget forever.
+   * Gives up on a task for good, whatever its remaining attempts, if this run
+   * still owns it. For a failure that no retry could fix - an unknown kind, a
+   * malformed payload - where burning the attempts one by one is pointless.
+   */
+  async failPermanently(task: Task, message: string, now = Date.now()): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE tasks SET status = 'failed', lease_until = NULL, last_error = ?, updated_at = ?
+          WHERE id = ? AND status = 'running' AND attempts = ?`,
+      )
+      .bind(message.slice(0, 1000), now, task.id, task.attempts)
+      .run();
+  }
+
+  /**
+   * Records a failure, if this run still owns the task. Schedules a retry while
+   * attempts remain, and gives up once they do not - a task that can never
+   * succeed must stop consuming the sweep's budget forever.
    */
   async fail(task: Task, error: unknown, now = Date.now()): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
@@ -148,9 +176,10 @@ export class TaskQueue {
     if (exhausted) {
       await this.db
         .prepare(
-          "UPDATE tasks SET status = 'failed', lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?",
+          `UPDATE tasks SET status = 'failed', lease_until = NULL, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = 'running' AND attempts = ?`,
         )
-        .bind(message.slice(0, 1000), now, task.id)
+        .bind(message.slice(0, 1000), now, task.id, task.attempts)
         .run();
       return;
     }
@@ -159,9 +188,9 @@ export class TaskQueue {
       .prepare(
         `UPDATE tasks
             SET status = 'pending', lease_until = NULL, run_after = ?, last_error = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND status = 'running' AND attempts = ?`,
       )
-      .bind(now + backoffDelay(task.attempts), message.slice(0, 1000), now, task.id)
+      .bind(now + backoffDelay(task.attempts), message.slice(0, 1000), now, task.id, task.attempts)
       .run();
   }
 

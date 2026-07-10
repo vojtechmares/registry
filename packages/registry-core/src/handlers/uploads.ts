@@ -31,8 +31,8 @@ export async function handleUploads(
   const mount = url.searchParams.get("mount");
   const digest = url.searchParams.get("digest");
 
-  await ctx.metadata.ensureRepository(name);
-
+  // The repository is created inside each path, only once its policy check has
+  // passed, so an upload a full or unsigned project refuses leaves no empty row.
   if (mount !== null) return crossMount(name, mount, url.searchParams.get("from"), ctx);
   if (digest !== null) return monolithicPost(request, name, digest, ctx);
 
@@ -40,6 +40,10 @@ export async function handleUploads(
 }
 
 async function beginSession(name: string, ctx: RegistryContext): Promise<Response> {
+  // Opening a session is the client committing to an upload, so the repository
+  // is created now: the later completion charges the project's quota, which
+  // needs the project row to exist.
+  await ctx.metadata.ensureRepository(name);
   const id = await ctx.uploads.create(name);
   return new Response(null, {
     status: 202,
@@ -71,8 +75,11 @@ async function crossMount(
   if (source === null) return beginSession(name, ctx);
 
   // A mount transfers no bytes, but it does make a second project responsible
-  // for them. It is a write, and it is charged and vetted like any other.
+  // for them. It is a write, and it is charged and vetted like any other -
+  // before the repository is created, so a refusal leaves nothing behind.
   await policyOf(ctx).beforeBlobLink(name, { digest: mount, size: source.size });
+
+  await ctx.metadata.ensureRepository(name);
 
   // The blob was there a moment ago. If it has since been collected, ask the
   // client to upload it rather than hand back a link to nothing.
@@ -148,6 +155,8 @@ async function monolithicPost(
   if (size === null) throw sizeInvalid("Content-Length is required for a monolithic upload");
 
   await policyOf(ctx).beforeBlobLink(name, { digest, size });
+
+  await ctx.metadata.ensureRepository(name);
 
   const key = ctx.content.blobKey(digest);
   await putVerified(ctx, key, request.body ?? emptyStream(), size, digest);

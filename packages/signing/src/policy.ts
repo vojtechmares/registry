@@ -3,13 +3,24 @@ import { isAttachmentTag, isSignatureArtifactType } from "./detect.js";
 /** A manifest, reduced to what decides whether a signature rule applies to it. */
 export interface SignedSubject {
   readonly artifactType: string | null;
-  /** Non-null when this manifest is attached to another, as a signature is. */
+  /** Non-null when this manifest is attached to another. Not on its own an exemption - see below. */
   readonly subjectDigest: string | null;
 }
 
-/** True for a manifest that exists to describe another one, and so cannot itself be signed. */
-function isAttachment(manifest: SignedSubject): boolean {
-  return manifest.subjectDigest !== null || isSignatureArtifactType(manifest.artifactType);
+/**
+ * True for a manifest that is itself a signature, and so cannot be signed again.
+ *
+ * A `subject` alone is deliberately NOT enough. A perfectly ordinary runnable
+ * image may carry a `subject` - the field is legal on any manifest - and
+ * exempting on its presence would let a pusher bolt a decoy `subject` onto an
+ * image and slip it, unsigned, past a project that requires signatures. Only a
+ * recognised signature artifact type exempts a manifest here. The other genuine
+ * exemptions - a signature in the legacy tag layout, and a platform manifest
+ * inside a signed index - depend on the repository graph and are decided by the
+ * registry, not by the manifest in isolation.
+ */
+function isSignatureManifest(manifest: SignedSubject): boolean {
+  return isSignatureArtifactType(manifest.artifactType);
 }
 
 /**
@@ -24,7 +35,7 @@ function isAttachment(manifest: SignedSubject): boolean {
  */
 export function needsSignatureOnPush(manifest: SignedSubject, tag: string | null): boolean {
   if (tag === null) return false;
-  if (isAttachment(manifest)) return false;
+  if (isSignatureManifest(manifest)) return false;
   // The signature itself arrives as a tag in the layout that predates referrers.
   if (isAttachmentTag(tag)) return false;
   return true;
@@ -32,14 +43,14 @@ export function needsSignatureOnPush(manifest: SignedSubject, tag: string | null
 
 /**
  * Whether serving this manifest must be refused unless a signature for it
- * exists.
+ * exists, considering only the manifest itself.
  *
- * Attachments are exempt or nothing could verify anything: `cosign verify`
- * fetches the signature before it can check it, and the signature has no
- * signature of its own. A caller must still consult the registry for the older
- * layout, whose signature manifests carry no `subject` and no `artifactType` -
- * only a tag names them.
+ * A signature is exempt or nothing could verify anything: `cosign verify`
+ * fetches the signature before it can check it, and the signature has none of
+ * its own. The registry adds the two exemptions that need the repository graph:
+ * a signature in the legacy layout (recognised only by its tag) and a platform
+ * manifest inside a signed index.
  */
 export function needsSignatureOnPull(manifest: SignedSubject): boolean {
-  return !isAttachment(manifest);
+  return !isSignatureManifest(manifest);
 }

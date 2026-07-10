@@ -89,7 +89,7 @@ function isPrivateIPv4(octets: number[]): boolean {
  * DNS answer is private slips through, and nothing here can prevent that from a
  * Worker. It raises the cost rather than closing the door.
  */
-export function isAllowedWebhookUrl(raw: string): boolean {
+export function isPublicHttpsUrl(raw: string): boolean {
   let url: URL;
   try {
     url = new URL(raw);
@@ -107,9 +107,9 @@ export function isAllowedWebhookUrl(raw: string): boolean {
   // refused. IPv6 has too many ways to spell an IPv4 address for a filter to
   // enumerate: `::ffff:127.0.0.1` normalises to `::ffff:7f00:1`, and beside it
   // sit the IPv4-compatible form, NAT64, 6to4 and Teredo, each of which reaches
-  // loopback through a prefix that looks like nothing in particular. A webhook
-  // receiver on the public internet is named by DNS, never by an IPv6 literal,
-  // so refusing the lot costs nothing and closes all of them at once.
+  // loopback through a prefix that looks like nothing in particular. A receiver
+  // on the public internet is named by DNS, never by an IPv6 literal, so
+  // refusing the lot costs nothing and closes all of them at once.
   if (hostname.startsWith("[")) return false;
 
   const octets = parseIPv4(hostname);
@@ -117,3 +117,13 @@ export function isAllowedWebhookUrl(raw: string): boolean {
 
   return true;
 }
+
+/**
+ * Whether the registry will call this URL on a user's behalf.
+ *
+ * The same guard for a webhook and for a replication remote: both are
+ * server-side fetches to an address the caller chose, and both must be kept off
+ * the internal network. `isPublicHttpsUrl` is the same function under its
+ * webhook-flavoured name.
+ */
+export const isAllowedWebhookUrl = isPublicHttpsUrl;

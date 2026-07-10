@@ -24,7 +24,22 @@ export interface RemoteOptions {
   readonly timeoutMs?: number;
   /** Injected so tests need no network. */
   readonly fetch?: typeof fetch;
+  /**
+   * Whether the registry may call a given URL. A replication remote is chosen
+   * by a project owner, so it is a fetch the registry makes on a stranger's
+   * behalf, and it must not reach an internal address. The guard is checked
+   * against the base URL, against every redirect a registry sends us to - a
+   * blob download legitimately redirects to a CDN - and against the token realm
+   * a `WWW-Authenticate` header names, which is fetched with credentials.
+   * Absent (as in tests) means every URL is allowed.
+   */
+  readonly guard?: (url: string) => boolean;
 }
+
+export class RemoteRegistryError extends Error {}
+
+/** How many redirects a single request will follow before giving up. */
+const MAX_REDIRECTS = 5;
 
 const ACCEPT_MANIFEST = [
   "application/vnd.oci.image.manifest.v1+json",
@@ -67,6 +82,44 @@ export class RemoteRegistry implements RegistryClient {
     this.name = new URL(this.base).host;
     this.fetcher = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+
+    // The base URL is vetted once here, so a rule that predates the route's own
+    // check, or one whose URL the guard would now refuse, never reaches `fetch`.
+    this.ensureAllowed(this.base);
+  }
+
+  private ensureAllowed(url: string): void {
+    if (this.options.guard !== undefined && !this.options.guard(url)) {
+      throw new RemoteRegistryError(`refusing to call "${url}"`);
+    }
+  }
+
+  /**
+   * Fetches, following redirects by hand so each hop can be vetted.
+   *
+   * A registry legitimately redirects a blob download to a CDN, so redirects
+   * must be followed - but a malicious or compromised remote could redirect to
+   * an internal address just as easily, so every hop goes through the guard.
+   */
+  private async send(url: string, init: RequestInit): Promise<Response> {
+    let target = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      this.ensureAllowed(target);
+
+      const response = await this.fetcher(target, {
+        ...init,
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+
+      if (response.status < 300 || response.status >= 400) return response;
+
+      const location = response.headers.get("Location");
+      if (location === null) return response;
+      target = new URL(location, target).toString();
+    }
+
+    throw new RemoteRegistryError(`too many redirects from ${this.name}`);
   }
 
   private basicHeader(): string | null {
@@ -94,10 +147,10 @@ export class RemoteRegistry implements RegistryClient {
     const basic = this.basicHeader();
     if (basic !== null) headers.set("Authorization", basic);
 
-    const response = await this.fetcher(url.toString(), {
-      headers,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    // The realm comes from the remote's own header, so it is as untrusted as any
+    // redirect: the credentials are about to be sent to it, and it must not be
+    // an internal address.
+    const response = await this.send(url.toString(), { headers });
     if (!response.ok) return null;
 
     const body = (await response.json()) as { token?: string; access_token?: string };
@@ -122,11 +175,7 @@ export class RemoteRegistry implements RegistryClient {
       headers.set("Authorization", `Bearer ${cached}`);
     }
 
-    const response = await this.fetcher(`${this.base}${path}`, {
-      ...init,
-      headers,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    const response = await this.send(`${this.base}${path}`, { ...init, headers });
 
     if (response.status !== 401 || !retry) return response;
 

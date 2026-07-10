@@ -618,6 +618,7 @@ export class AdminStore {
     limit: number,
     last: string | null,
     viewer: Viewer | null,
+    project: string | null = null,
   ): Promise<{ names: string[]; hasMore: boolean }> {
     const conditions: string[] = [];
     const bindings: unknown[] = [];
@@ -625,6 +626,12 @@ export class AdminStore {
     if (last !== null) {
       conditions.push("r.name > ?");
       bindings.push(last);
+    }
+
+    // A project-pinned token confines the whole catalog to its project.
+    if (project !== null) {
+      conditions.push("r.project = ?");
+      bindings.push(project);
     }
 
     const visible = visibleProjects(viewer, "p");

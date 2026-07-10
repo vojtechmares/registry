@@ -1,4 +1,5 @@
 import { isValidRepositoryName } from "@registry/oci";
+import { isPublicHttpsUrl } from "@registry/notifications";
 import { projectOf } from "@registry/projects";
 import {
   type RegistryClient,
@@ -42,6 +43,10 @@ async function remoteRegistry(store: ReplicationStore, rule: ReplicationRule) {
   const credentials = await store.credentials(rule.id);
   return new RemoteRegistry({
     url: rule.remoteUrl,
+    // A project owner chose this URL, so the registry vets the base, every
+    // redirect, and the token realm against the same filter a webhook target
+    // passes - it must not become a way to reach the internal network.
+    guard: isPublicHttpsUrl,
     ...(credentials === null ? {} : { credentials }),
   });
 }
