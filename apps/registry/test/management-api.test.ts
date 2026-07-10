@@ -20,8 +20,8 @@ beforeAll(async () => {
   await seedUser({ id: "root-id", username: ADMIN, password: ADMIN_PASSWORD, isAdmin: true });
   // A token owned by the administrator, scoped only to pull one repository.
   await env.DB.prepare(
-    `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, expires_at, revoked, created_at)
-     VALUES (?, ?, ?, ?, ?, NULL, 0, ?)`,
+    `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, project, expires_at, revoked, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?)`,
   )
     .bind(
       "tok1",
@@ -29,6 +29,7 @@ beforeAll(async () => {
       "root-id",
       await hashTokenSecret(TOKEN_SECRET),
       JSON.stringify([{ repository: "root/app", actions: ["pull"] }]),
+      "root",
       Date.now(),
     )
     .run();

@@ -26,11 +26,13 @@ async function seedToken(options: {
   secret: string;
   scopes: Scope[];
   revoked: boolean;
+  /** Null mints a token from before pinning was required. It must not authenticate. */
+  project?: string | null;
 }): Promise<string> {
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, expires_at, revoked, created_at)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+    `INSERT INTO access_tokens (id, name, user_id, secret_hash, scopes, project, expires_at, revoked, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
   )
     .bind(
       options.id,
@@ -38,6 +40,7 @@ async function seedToken(options: {
       "alice-id",
       await hashTokenSecret(options.secret),
       JSON.stringify(options.scopes),
+      options.project === undefined ? "alice" : options.project,
       options.revoked ? 1 : 0,
       now,
     )

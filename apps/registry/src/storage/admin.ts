@@ -1,5 +1,6 @@
 import type {
   AccessTokenSummary,
+  ProjectAccessToken,
   LifecyclePolicy,
   ManifestDetail,
   RegistryStats,
@@ -453,6 +454,56 @@ export class AdminStore {
     const result = await this.db
       .prepare("DELETE FROM access_tokens WHERE id = ? AND user_id = ?")
       .bind(tokenId, userId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  /** Every token pinned to the project, whoever minted it. For its owners. */
+  async listProjectTokens(project: string): Promise<ProjectAccessToken[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT t.id, t.name, t.scopes, t.project, t.expires_at, t.revoked, t.created_at, t.last_used_at,
+                u.username
+         FROM access_tokens AS t
+         JOIN users AS u ON u.id = t.user_id
+         WHERE t.project = ?
+         ORDER BY t.created_at DESC`,
+      )
+      .bind(project)
+      .all<{
+        id: string;
+        name: string;
+        scopes: string;
+        project: string;
+        expires_at: number | null;
+        revoked: number;
+        created_at: number;
+        last_used_at: number | null;
+        username: string;
+      }>();
+
+    return rows.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      username: row.username,
+      scopes: parseScopes(row.scopes),
+      project: row.project,
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+      lastUsedAt: row.last_used_at,
+      revoked: row.revoked === 1,
+    }));
+  }
+
+  /**
+   * Revokes a token by project rather than by owner, for an owner cleaning up
+   * after a member who has left. The `project` predicate is what stops it from
+   * being a way to revoke any token in the registry by guessing its id.
+   */
+  async revokeProjectToken(project: string, tokenId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM access_tokens WHERE id = ? AND project = ?")
+      .bind(tokenId, project)
       .run();
     return (result.meta.changes ?? 0) > 0;
   }

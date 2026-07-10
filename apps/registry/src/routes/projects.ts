@@ -94,7 +94,7 @@ function validName(name: string): string {
  * settings are the control plane, and a token confined to `pull` on one
  * repository must not be able to turn off the signature rule that guards it.
  */
-async function requireProjectOwner(ctx: ProjectContext, project: string): Promise<Identity> {
+export async function requireProjectOwner(ctx: ProjectContext, project: string): Promise<Identity> {
   const identity = requireUser(ctx.principal);
   if (identity.isAdmin) return identity;
   if (identity.username === project) return identity;

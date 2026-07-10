@@ -33,7 +33,8 @@ suite is the only thing that needs real infrastructure.
 - Layer deduplication: identical content is stored once and linked from each
   repository that references it.
 - Authentication: password (PBKDF2) and machine-to-machine tokens, with the
-  Docker bearer-token flow and scoped permissions.
+  Docker bearer-token flow and scoped permissions. Every token is pinned to one
+  project and managed from it; there is no registry-wide machine credential.
 - Rate limiting via a Durable Object token bucket, priced so credential checking
   cannot be used to amplify load.
 - Lifecycle management and refcounted garbage collection on a nightly cron.
@@ -103,6 +104,14 @@ Worker behaviour is set through `vars` in `wrangler.jsonc`:
 
 Secrets (`JWT_SECRET`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD_HASH`)
 are set with `wrangler secret put`.
+
+## Upgrading
+
+The `0012` migration makes every access token name a project. Tokens issued
+before it authenticate nothing, on either plane, and must be re-issued from the
+project they are meant to reach - a project's **Tokens** tab, or
+`POST /api/v1/projects/<name>/tokens`. The old rows survive so they can be found
+and revoked; `GET /api/v1/tokens` shows them with no project.
 
 ## Known limitations
 

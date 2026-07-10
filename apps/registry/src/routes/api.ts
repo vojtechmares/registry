@@ -32,7 +32,7 @@ import { TaskQueue } from "../tasks/queue.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
 import { StatsStore } from "../storage/stats.js";
-import { handleProjects, tokenProjectPin, viewerOf, windowDays } from "./projects.js";
+import { handleProjects, requireProjectOwner, tokenProjectPin, viewerOf, windowDays } from "./projects.js";
 import {
   ApiError,
   badRequest,
@@ -168,6 +168,11 @@ async function dispatch(ctx: Context): Promise<Response> {
   if (path.startsWith("/tokens/")) return revokeToken(ctx, path.slice("/tokens/".length));
   if (path === "/users") return request.method === "GET" ? listUsers(ctx) : createUser(ctx);
   if (path.startsWith("/users/")) return deleteUser(ctx, path.slice("/users/".length));
+
+  // Ahead of `handleProjects`, so that minting a token stays beside the other
+  // token routes and next to `authorizeFor`, which decides what it may grant.
+  const projectToken = /^\/projects\/([^/]+)\/tokens(?:\/([^/]+))?$/.exec(path);
+  if (projectToken !== null) return projectTokens(ctx, projectToken[1]!, projectToken[2]);
 
   const project = await handleProjects(ctx, path);
   if (project !== null) return project;
@@ -434,7 +439,45 @@ async function listTokens(ctx: Context): Promise<Response> {
   return Response.json({ tokens: await ctx.admin.listTokens(identity.id) });
 }
 
+/**
+ * `/projects/:name/tokens[/:id]` - where a project's credentials are managed.
+ *
+ * Listing and revoking are for owners, because a project's tokens are its
+ * attack surface and reading them off is how an owner audits it. Minting is for
+ * any member, bounded as ever by what the member already holds: a developer who
+ * may push to one repository may mint a token that pushes to that repository,
+ * and nothing else.
+ */
+async function projectTokens(ctx: Context, project: string, tokenId: string | undefined): Promise<Response> {
+  if (tokenId !== undefined) {
+    if (ctx.request.method !== "DELETE") throw notFound();
+    await requireProjectOwner(ctx, project);
+    if (!(await ctx.admin.revokeProjectToken(project, tokenId))) throw notFound();
+    return new Response(null, { status: 204 });
+  }
+
+  if (ctx.request.method === "GET") {
+    await requireProjectOwner(ctx, project);
+    return Response.json({ tokens: await ctx.admin.listProjectTokens(project) });
+  }
+
+  return mintToken(ctx, project);
+}
+
+/** `POST /tokens`. Kept for scripts; the project now has to be named in the body. */
 async function createToken(ctx: Context): Promise<Response> {
+  return mintToken(ctx, null);
+}
+
+/**
+ * Mints an access token, pinned to `project`.
+ *
+ * Every token names a project. A token that named none reached every project
+ * its owner could, so one leaked from a CI job that only ever pushed to
+ * `acme/api` could also delete `payments/vault`. The pin is checked again on
+ * every request, and a scope may never carry the token out of it.
+ */
+async function mintToken(ctx: Context, pinned: string | null): Promise<Response> {
   if (ctx.request.method !== "POST") throw notFound();
   // A machine token must not manage tokens at all, let alone mint a wider one.
   const identity = requireUser(ctx.principal);
@@ -450,16 +493,19 @@ async function createToken(ctx: Context): Promise<Response> {
   if (!Array.isArray(body.scopes) || body.scopes.length === 0)
     throw badRequest("at least one scope is required");
 
-  let project: string | null = null;
-  if (body.project !== undefined && body.project !== "") {
-    if (!isValidProjectName(body.project)) throw badRequest(`"${body.project}" is not a valid project name`);
-    // Whether the project exists is not disclosed here: a caller who cannot
-    // grant on it is refused by the scope check below either way, and reporting
-    // "does not exist" would turn this into an existence oracle for guessed
-    // names. A token pinned to a project that does not exist yet simply reaches
-    // nothing until it does.
-    project = body.project;
+  if (pinned !== null && body.project !== undefined && body.project !== pinned) {
+    throw badRequest(`the body names project "${body.project}", but the path names "${pinned}"`);
   }
+
+  const project = pinned ?? body.project ?? "";
+  if (project === "") {
+    throw badRequest("project is required: an access token may not reach the whole registry");
+  }
+  // Whether the project exists is not disclosed here: a caller who cannot grant
+  // on it is refused by the scope check below either way, and reporting "does
+  // not exist" would turn this into an existence oracle for guessed names. A
+  // token pinned to a project that does not exist yet reaches nothing until it does.
+  if (!isValidProjectName(project)) throw badRequest(`"${project}" is not a valid project name`);
 
   const authorize = authorizeFor(ctx);
   const scopes: Scope[] = [];
@@ -477,19 +523,13 @@ async function createToken(ctx: Context): Promise<Response> {
     //
     // A wildcard is checked against the thing it stands for. Pinned to a
     // project, `*` means "everywhere in this project", so the project name is
-    // the probe and any of its owners may mint one. Unpinned, it means the whole
-    // registry, which only an administrator can grant.
+    // the probe and any of its owners may mint one.
     if (scope.repository === "*") {
-      if (project === null && !identity.isAdmin) {
-        throw forbidden("only administrators may scope a token to `*` without pinning it to a project");
-      }
-      if (project !== null) {
-        for (const action of actions) await assertAllowed(authorize, project, action);
-      }
+      for (const action of actions) await assertAllowed(authorize, project, action);
     } else {
       // A named scope outside the pinned project could never authorize anything,
       // and reads as a permission the token does not have. Refuse it outright.
-      if (project !== null && projectOf(scope.repository) !== project) {
+      if (projectOf(scope.repository) !== project) {
         throw badRequest(`scope "${scope.repository}" lies outside the "${project}" project`);
       }
       const probe = scope.repository.endsWith("/*") ? scope.repository.slice(0, -2) : scope.repository;

@@ -114,6 +114,18 @@ export async function authenticateCredentials(
   return { kind: "user", identity: { id: user.id, username: user.username, isAdmin: user.isAdmin } };
 }
 
+/**
+ * A token that names no project reaches every project its owner can, which is
+ * the blast radius a leaked CI credential should never have. Tokens are pinned
+ * at creation now, so the only rows that are not are the ones minted before
+ * that rule existed. They authenticate nothing.
+ *
+ * 401 rather than 403: the credential is not acceptable, and the remedy is to
+ * present a different one.
+ */
+const UNPINNED_TOKEN =
+  "this access token is not scoped to a project and is no longer accepted; issue a new one from the project";
+
 async function authenticateAccessToken(id: string, secret: string, store: AuthStore): Promise<Principal> {
   const token = await store.findAccessToken(id);
   if (token === null || token.revoked) throw unauthorized("invalid or revoked access token");
@@ -123,6 +135,10 @@ async function authenticateAccessToken(id: string, secret: string, store: AuthSt
   if (!timingSafeEqualString(await hashTokenSecret(secret), token.secretHash)) {
     throw unauthorized("invalid or revoked access token");
   }
+
+  // After the secret is verified, so that the message cannot be used to sort
+  // guessed token ids into "exists but unpinned" and "does not exist".
+  if (token.project === null) throw unauthorized(UNPINNED_TOKEN);
 
   const user = await store.findUserById(token.userId);
   if (user === null || user.disabled) throw unauthorized("the token's owner is no longer active");
@@ -163,13 +179,12 @@ async function authenticateBearer(
   // project its owner can.
   const confined = claims as { scopes?: Scope[]; project?: string | null };
   if (confined.scopes !== undefined) {
-    return {
-      kind: "token",
-      tokenId: claims.jti,
-      identity,
-      scopes: confined.scopes,
-      project: confined.project ?? null,
-    };
+    // A bearer minted from an unpinned access token before pinning was required.
+    // Its parent no longer authenticates, and neither may it.
+    const project = confined.project ?? null;
+    if (project === null) throw unauthorized(UNPINNED_TOKEN);
+
+    return { kind: "token", tokenId: claims.jti, identity, scopes: confined.scopes, project };
   }
 
   // Session tokens for the bootstrap admin never touch the database.

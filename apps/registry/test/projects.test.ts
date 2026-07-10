@@ -451,15 +451,37 @@ describe("adding a project member by username", () => {
   });
 
   it("is closed to a machine token, as the rest of the control plane is", async () => {
+    // Pinned to the very project it is trying to change, and owned by an admin.
+    // Neither buys it the control plane.
     const secret = await seedToken({
       id: "projtoken0000006",
       secret: "v".repeat(43),
       userId: ADMIN.id,
       scopes: [{ repository: "*", actions: ["pull", "push"] }],
-      project: null,
+      project: "add-member",
     });
 
     const response = await addMember({ username: BOB.username, role: "owner" }, basic("root", secret));
     expect(response.status).toBe(403);
+  });
+
+  it("refuses a token that names no project, whatever it is pointed at", async () => {
+    // Every token names a project now. The rows that do not are the ones minted
+    // before that rule, and they authenticate nothing - not even a public read.
+    const secret = await seedToken({
+      id: "projtoken0000007",
+      secret: "w".repeat(43),
+      userId: ADMIN.id,
+      scopes: [{ repository: "*", actions: ["pull", "push"] }],
+      project: null,
+    });
+
+    const control = await addMember({ username: BOB.username, role: "owner" }, basic("root", secret));
+    expect(control.status).toBe(401);
+
+    const data = await call("GET", "/v2/add-member/app/tags/list", {
+      headers: { Authorization: basic("root", secret) },
+    });
+    expect(data.status).toBe(401);
   });
 });

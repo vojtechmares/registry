@@ -21,6 +21,7 @@ import {
 } from "@workspace/ui/components/table";
 import { ProjectMembers } from "@/components/project-members";
 import { ProjectRules } from "@/components/project-rules";
+import { ProjectTokens } from "@/components/project-tokens";
 import { ApiError, api } from "@/lib/api";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
@@ -297,6 +298,7 @@ function ProjectPage() {
           {owns && <TabsTrigger value="settings">Settings</TabsTrigger>}
           {owns && <TabsTrigger value="members">Members</TabsTrigger>}
           {owns && <TabsTrigger value="rules">Rules</TabsTrigger>}
+          {owns && <TabsTrigger value="tokens">Tokens</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="usage" className="pt-4">
@@ -316,6 +318,11 @@ function ProjectPage() {
         {owns && (
           <TabsContent value="rules" className="pt-4">
             <ProjectRules name={name} />
+          </TabsContent>
+        )}
+        {owns && (
+          <TabsContent value="tokens" className="pt-4">
+            <ProjectTokens project={name} />
           </TabsContent>
         )}
       </Tabs>

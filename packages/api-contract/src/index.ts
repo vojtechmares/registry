@@ -133,12 +133,22 @@ export interface AccessTokenSummary {
   readonly id: string;
   readonly name: string;
   readonly scopes: ReadonlyArray<{ repository: string; actions: readonly Action[] }>;
-  /** Non-null pins the token to one project, whatever its scopes say. */
+  /**
+   * The one project this token reaches, whatever its scopes say.
+   *
+   * Null only for a token minted before every token had to name a project.
+   * Such a token no longer authenticates, and exists to be revoked.
+   */
   readonly project: string | null;
   readonly expiresAt: number | null;
   readonly createdAt: number;
   readonly lastUsedAt: number | null;
   readonly revoked: boolean;
+}
+
+/** A project's token, as its owner sees it: whose it is, and what it reaches. */
+export interface ProjectAccessToken extends AccessTokenSummary {
+  readonly username: string;
 }
 
 /** The plaintext secret is returned exactly once, at creation. */

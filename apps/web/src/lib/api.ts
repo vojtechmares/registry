@@ -7,6 +7,7 @@ import type {
   ManifestDetail,
   NotificationDelivery,
   NotificationPolicySummary,
+  ProjectAccessToken,
   ProjectDetail,
   ProjectSettings,
   ProjectSummary,
@@ -120,13 +121,33 @@ export const api = {
       body: JSON.stringify(policy),
     }),
 
+  /** Every token the caller owns, across the projects they belong to. */
   tokens: () => request<{ tokens: AccessTokenSummary[] }>("/tokens").then((r) => r.tokens),
 
-  createToken: (input: {
-    name: string;
-    scopes: Array<{ repository: string; actions: string[] }>;
-    expiresInDays?: number;
-  }) => request<CreatedAccessToken>("/tokens", { method: "POST", body: JSON.stringify(input) }),
+  /** A project's tokens, whoever minted them. Owners only. */
+  projectTokens: (project: string) =>
+    request<{ tokens: ProjectAccessToken[] }>(`/projects/${encodeURIComponent(project)}/tokens`).then(
+      (r) => r.tokens,
+    ),
+
+  /** A token always names a project; there is no registry-wide credential. */
+  createProjectToken: (
+    project: string,
+    input: {
+      name: string;
+      scopes: Array<{ repository: string; actions: string[] }>;
+      expiresInDays?: number;
+    },
+  ) =>
+    request<CreatedAccessToken>(`/projects/${encodeURIComponent(project)}/tokens`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  revokeProjectToken: (project: string, id: string) =>
+    request<void>(`/projects/${encodeURIComponent(project)}/tokens/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   revokeToken: (id: string) => request<void>(`/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
