@@ -24,6 +24,7 @@ const project: ProjectDetail = {
   usedBytes: 0,
   requireSignaturePush: false,
   requireSignaturePull: false,
+  immutableTags: false,
   repositories: 0,
   createdAt: Date.now(),
   updatedAt: Date.now(),

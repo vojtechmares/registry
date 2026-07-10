@@ -21,6 +21,7 @@ import { R2ContentStore } from "./storage/content.js";
 import { D1MetadataStore } from "./storage/metadata.js";
 import { ProjectStore } from "./storage/projects.js";
 import { SignatureIndex } from "./storage/signatures.js";
+import { TagIndex } from "./storage/tags.js";
 import { StatsStore } from "./storage/stats.js";
 import { DurableObjectUploadStore } from "./storage/uploads.js";
 import { TaskQueue } from "./tasks/queue.js";
@@ -218,7 +219,7 @@ function registryContext(
     uploads: new DurableObjectUploadStore(env.UPLOAD_SESSION),
     config: readCoreConfig(env),
     authorize: createAuthorize({ principal, store, config: readConfig(env, request) }),
-    policy: new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB)),
+    policy: new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB), new TagIndex(env.DB)),
     events,
   };
 }

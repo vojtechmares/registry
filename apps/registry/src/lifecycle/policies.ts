@@ -112,8 +112,25 @@ async function retireUntagged(env: Env, repository: string, ttlDays: number): Pr
   return candidates.results.length;
 }
 
+/** Whether the repository's project has promised its tags will not move. */
+async function tagsAreImmutable(env: Env, repository: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT p.immutable_tags AS immutable
+     FROM repositories AS r
+     JOIN projects AS p ON p.name = r.project
+     WHERE r.name = ?`,
+  )
+    .bind(repository)
+    .first<{ immutable: number }>();
+  return row?.immutable === 1;
+}
+
 /** Keeps the `keep` most recently updated tags, removing the rest. */
 async function trimTags(env: Env, repository: string, keep: number): Promise<number> {
+  // Checked here, at the deletion, rather than at the caller. This is the other
+  // cron that retires tags, and the one it is easiest to forget.
+  if (await tagsAreImmutable(env, repository)) return 0;
+
   const doomed = await env.DB.prepare(
     `SELECT name FROM tags
      WHERE repository = ?

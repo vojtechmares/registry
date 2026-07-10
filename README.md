@@ -37,6 +37,10 @@ suite is the only thing that needs real infrastructure.
 - Rate limiting via a Durable Object token bucket, priced so credential checking
   cannot be used to amplify load.
 - Lifecycle management and refcounted garbage collection on a nightly cron.
+- Per-project immutable tags: a tag names one digest, and neither a push, a
+  delete, nor a cleanup rule may change that.
+- Cleanup rules that select tags by glob, semver range, or regular expression,
+  matched by an engine that cannot backtrack.
 - Admin dashboard and public registry UI.
 
 ## Development
@@ -116,6 +120,15 @@ leak access:
   untagged, so the grace period is not a grace period for old images. This
   matches the pre-existing nightly lifecycle job; both would need an
   "untagged-since" timestamp to honour the window.
+- **An immutable tag can still be lost to a concurrent delete.** The push path
+  restates its check in the `tagManifest` upsert, so two simultaneous pushes
+  cannot silently overwrite each other. The delete path has no such backstop:
+  `beforeTagDelete` reads the tag, finds nothing, and permits the delete, while
+  a concurrent push creates it. Guarding the `DELETE` the same way is not enough
+  either, because `deleteManifest` removes the manifest and its tags in one
+  batch, and suppressing half of that batch would leave a tag pointing at a
+  manifest that no longer exists. It needs a transaction, which D1 does not give
+  a Worker across statements. Every sequential delete is refused.
 - **The 0004 migration moved per-repository grants to per-project membership.**
   That is the intended model - a project has members, not per-repository ACLs -
   but a pre-existing grant on one repository becomes access to its whole

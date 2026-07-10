@@ -9,6 +9,7 @@ interface ProjectRow {
   used_bytes: number;
   require_signature_push: number;
   require_signature_pull: number;
+  immutable_tags: number;
   repositories: number;
   created_at: number;
   updated_at: number;
@@ -23,6 +24,7 @@ const COLUMNS = `
   p.used_bytes,
   p.require_signature_push,
   p.require_signature_pull,
+  p.immutable_tags,
   p.created_at,
   p.updated_at,
   (SELECT COUNT(*) FROM repositories AS r WHERE r.project = p.name) AS repositories,
@@ -38,6 +40,7 @@ function toSummary(row: ProjectRow): ProjectSummary {
     usedBytes: row.used_bytes,
     requireSignaturePush: row.require_signature_push === 1,
     requireSignaturePull: row.require_signature_pull === 1,
+    immutableTags: row.immutable_tags === 1,
     repositories: row.repositories,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -56,6 +59,7 @@ export interface ProjectRules {
   readonly usedBytes: number;
   readonly requireSignaturePush: boolean;
   readonly requireSignaturePull: boolean;
+  readonly immutableTags: boolean;
 }
 
 export class ProjectStore {
@@ -64,7 +68,7 @@ export class ProjectStore {
   async rules(project: string): Promise<ProjectRules | null> {
     const row = await this.db
       .prepare(
-        `SELECT name, quota_bytes, used_bytes, require_signature_push, require_signature_pull
+        `SELECT name, quota_bytes, used_bytes, require_signature_push, require_signature_pull, immutable_tags
          FROM projects WHERE name = ?`,
       )
       .bind(project)
@@ -74,6 +78,7 @@ export class ProjectStore {
         used_bytes: number;
         require_signature_push: number;
         require_signature_pull: number;
+        immutable_tags: number;
       }>();
     if (row === null) return null;
     return {
@@ -82,6 +87,7 @@ export class ProjectStore {
       usedBytes: row.used_bytes,
       requireSignaturePush: row.require_signature_push === 1,
       requireSignaturePull: row.require_signature_pull === 1,
+      immutableTags: row.immutable_tags === 1,
     };
   }
 
@@ -236,6 +242,10 @@ export class ProjectStore {
     if (settings.requireSignaturePull !== undefined) {
       assignments.push("require_signature_pull = ?");
       bindings.push(settings.requireSignaturePull ? 1 : 0);
+    }
+    if (settings.immutableTags !== undefined) {
+      assignments.push("immutable_tags = ?");
+      bindings.push(settings.immutableTags ? 1 : 0);
     }
     if (assignments.length === 0) return this.exists(name);
 

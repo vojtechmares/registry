@@ -222,6 +222,10 @@ export interface RegistryPolicy {
   beforeManifestPush(repository: string, record: ManifestRecord, tag: string | null): Promise<void>;
   /** Before a manifest's bytes are served. */
   beforeManifestPull(repository: string, record: ManifestRecord): Promise<void>;
+  /** Before a tag is removed. The manifest it names survives. */
+  beforeTagDelete(repository: string, tag: string): Promise<void>;
+  /** Before a manifest is removed, taking every tag that names it with it. */
+  beforeManifestDelete(repository: string, digest: string): Promise<void>;
 }
 
 /** A policy that refuses nothing. What a registry with no projects behind it does. */
@@ -229,6 +233,8 @@ export const PERMISSIVE_POLICY: RegistryPolicy = {
   async beforeBlobLink() {},
   async beforeManifestPush() {},
   async beforeManifestPull() {},
+  async beforeTagDelete() {},
+  async beforeManifestDelete() {},
 };
 
 /**

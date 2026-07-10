@@ -154,6 +154,11 @@ async function deleteManifest(name: string, reference: string, ctx: RegistryCont
   await ctx.authorize(name, "delete");
   if (!ctx.config.enableDeletes) throw unsupported("manifest deletion is disabled");
 
+  // Ahead of the write, as on the push path. A policy that protects a tag has
+  // to be asked before the row is gone, not after.
+  if (parsed.kind === "digest") await policyOf(ctx).beforeManifestDelete(name, parsed.digest);
+  else await policyOf(ctx).beforeTagDelete(name, parsed.tag);
+
   // Deleting by digest removes the manifest and every tag that pointed at it.
   // Deleting by tag removes only the tag; the manifest survives for other tags.
   const removed =

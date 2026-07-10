@@ -342,6 +342,21 @@ export class D1MetadataStore implements MetadataStore {
     await this.db.batch(statements);
   }
 
+  /**
+   * Points a tag at a manifest, creating it or moving it.
+   *
+   * The `WHERE` on the upsert is what makes an immutable tag actually immutable.
+   * `ProjectPolicy.beforeManifestPush` reads the tag and then this writes it,
+   * and between those two statements a concurrent push of a different digest to
+   * the same new tag would find no tag to protect either. Both would be allowed,
+   * and one would silently overwrite the other - which is the precise failure
+   * the project asked the registry to prevent.
+   *
+   * So the condition is restated where the write happens: move the tag only if
+   * the digest is unchanged, or the project does not enforce immutability. The
+   * policy hook still exists, and still answers 403; this clause is what the
+   * promise rests on when two pushes arrive at once.
+   */
   async tagManifest(repository: string, tag: string, digest: string): Promise<void> {
     const now = this.now();
     await this.db
@@ -350,7 +365,13 @@ export class D1MetadataStore implements MetadataStore {
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (repository, name) DO UPDATE SET
            manifest_digest = excluded.manifest_digest,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         WHERE tags.manifest_digest = excluded.manifest_digest
+            OR NOT EXISTS (
+                 SELECT 1 FROM repositories AS r
+                 JOIN projects AS p ON p.name = r.project
+                 WHERE r.name = tags.repository AND p.immutable_tags = 1
+               )`,
       )
       .bind(repository, tag, digest, now, now)
       .run();

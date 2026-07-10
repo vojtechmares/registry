@@ -16,6 +16,7 @@ import { R2ContentStore } from "../storage/content.js";
 import { D1MetadataStore } from "../storage/metadata.js";
 import { ProjectStore } from "../storage/projects.js";
 import { SignatureIndex } from "../storage/signatures.js";
+import { TagIndex } from "../storage/tags.js";
 import { LocalRegistry } from "./local.js";
 import { ReplicationStore } from "./store.js";
 
@@ -35,7 +36,7 @@ export function localRegistry(env: Env): LocalRegistry {
   return new LocalRegistry(
     new D1MetadataStore(env.DB),
     new R2ContentStore(env.BUCKET),
-    new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB)),
+    new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB), new TagIndex(env.DB)),
   );
 }
 

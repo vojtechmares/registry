@@ -142,6 +142,28 @@ function Settings({ project }: { project: ProjectDetail }) {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Immutable tags</CardTitle>
+          <CardDescription>
+            A tag names one digest, for good. It cannot be moved, deleted, or retired by a cleanup rule.
+            Pushing the digest a tag already names still succeeds, so a CI job that reruns does not fail.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="immutable-tags"
+              checked={project.immutableTags}
+              onCheckedChange={(checked) => update.mutate({ immutableTags: checked })}
+            />
+            <Label htmlFor="immutable-tags" className="text-sm font-normal">
+              Enforce immutable tags
+            </Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Description</CardTitle>
         </CardHeader>
         <CardContent>

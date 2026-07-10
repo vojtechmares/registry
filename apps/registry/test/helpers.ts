@@ -73,6 +73,7 @@ export interface SeedProjectOptions {
   readonly quotaBytes?: number | null;
   readonly requireSignaturePush?: boolean;
   readonly requireSignaturePull?: boolean;
+  readonly immutableTags?: boolean;
 }
 
 export async function seedProject(options: SeedProjectOptions): Promise<void> {
@@ -80,13 +81,14 @@ export async function seedProject(options: SeedProjectOptions): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO projects
        (name, visibility, quota_bytes, used_bytes, require_signature_push, require_signature_pull,
-        created_at, updated_at)
-     VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+        immutable_tags, created_at, updated_at)
+     VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET
        visibility = excluded.visibility,
        quota_bytes = excluded.quota_bytes,
        require_signature_push = excluded.require_signature_push,
-       require_signature_pull = excluded.require_signature_pull`,
+       require_signature_pull = excluded.require_signature_pull,
+       immutable_tags = excluded.immutable_tags`,
   )
     .bind(
       options.name,
@@ -94,6 +96,7 @@ export async function seedProject(options: SeedProjectOptions): Promise<void> {
       options.quotaBytes ?? null,
       options.requireSignaturePush === true ? 1 : 0,
       options.requireSignaturePull === true ? 1 : 0,
+      options.immutableTags === true ? 1 : 0,
       now,
       now,
     )

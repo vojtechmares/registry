@@ -28,6 +28,12 @@ export interface ProjectSummary {
   readonly usedBytes: number;
   readonly requireSignaturePush: boolean;
   readonly requireSignaturePull: boolean;
+  /**
+   * A tag in this project may not be moved to another digest, nor deleted, nor
+   * retired by a cleanup rule. Re-pushing the digest a tag already names is
+   * still allowed: it changes nothing, and CI reruns.
+   */
+  readonly immutableTags: boolean;
   readonly repositories: number;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -53,6 +59,7 @@ export interface ProjectSettings {
   readonly quotaBytes?: number | null;
   readonly requireSignaturePush?: boolean;
   readonly requireSignaturePull?: boolean;
+  readonly immutableTags?: boolean;
 }
 
 export interface RegistryStats {

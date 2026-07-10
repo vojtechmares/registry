@@ -670,6 +670,10 @@ async function updateProject(ctx: ProjectContext, name: string): Promise<Respons
       throw badRequest("requireSignaturePull must be a boolean");
     settings.requireSignaturePull = body.requireSignaturePull;
   }
+  if ("immutableTags" in body) {
+    if (typeof body.immutableTags !== "boolean") throw badRequest("immutableTags must be a boolean");
+    settings.immutableTags = body.immutableTags;
+  }
 
   if (!(await ctx.projects.update(name, settings))) throw notFound(`project "${name}" does not exist`);
   return Response.json(await ctx.projects.get(name, identity.id));

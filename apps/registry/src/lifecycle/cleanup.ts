@@ -20,6 +20,7 @@ interface PolicyRow {
   schedule: string;
   rules: string;
   untagged_older_than_days: number | null;
+  immutable_tags: number;
 }
 
 function parseRules(raw: string): CleanupRule[] {
@@ -41,10 +42,11 @@ function parseRules(raw: string): CleanupRule[] {
  */
 export async function runDueCleanups(env: Env, now = Date.now()): Promise<CleanupReport[]> {
   const due = await env.DB.prepare(
-    `SELECT project, schedule, rules, untagged_older_than_days
-     FROM cleanup_policies
-     WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
-     ORDER BY next_run_at ASC
+    `SELECT c.project, c.schedule, c.rules, c.untagged_older_than_days, p.immutable_tags
+     FROM cleanup_policies AS c
+     JOIN projects AS p ON p.name = c.project
+     WHERE c.enabled = 1 AND c.next_run_at IS NOT NULL AND c.next_run_at <= ?
+     ORDER BY c.next_run_at ASC
      LIMIT ?`,
   )
     .bind(now, MAX_POLICIES_PER_RUN)
@@ -73,10 +75,15 @@ async function runPolicy(env: Env, policy: PolicyRow, now: number): Promise<Clea
     .bind(policy.project)
     .all<{ name: string }>();
 
+  // A project that enforces immutable tags retires none of them, whatever its
+  // rules say. A promise that a cron may quietly retract is not a promise. The
+  // untagged sweep below still runs: an untagged manifest has no tag to protect.
   let tagsRemoved = 0;
-  for (const { name } of repositories.results) {
-    if (tagsRemoved >= MAX_DELETIONS_PER_POLICY) break;
-    tagsRemoved += await cleanRepository(env, policy.project, name, rules, now);
+  if (policy.immutable_tags !== 1) {
+    for (const { name } of repositories.results) {
+      if (tagsRemoved >= MAX_DELETIONS_PER_POLICY) break;
+      tagsRemoved += await cleanRepository(env, policy.project, name, rules, now);
+    }
   }
 
   const untaggedRemoved =
