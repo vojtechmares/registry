@@ -5,6 +5,7 @@ import { Button } from "@workspace/ui/components/button";
 import { toast } from "@workspace/ui/components/sonner";
 import { useTheme } from "@workspace/ui/components/theme-provider";
 import { api } from "@/lib/api";
+import { SiteFooter } from "@/components/site-footer";
 import { sessionStore, setSessionUser } from "@/store/session";
 
 function ThemeToggle() {
@@ -94,9 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
 
-      <footer className="border-t py-6 text-center text-xs text-muted-foreground">
-        A serverless OCI registry on Cloudflare.
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
