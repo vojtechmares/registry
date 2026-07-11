@@ -1,18 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
 import { OciError, blobUploadUnknown } from "@registry/oci";
 import {
-  ContentIntegrityError,
   UploadSession,
   createSessionState,
+  emptyStream,
   type ChunkOptions,
   type SessionBackend,
   type SessionState,
   type UploadedPart,
 } from "@registry/registry-core";
 import type { Env } from "../env.js";
+import { putVerified } from "../storage/content.js";
 import { toErrorResponse } from "../errors.js";
 import { blobKey, carryKey, stagingKey } from "../keys.js";
-import { isIntegrityError } from "../storage/content.js";
 
 export const UPLOAD_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -226,23 +226,7 @@ class R2SessionBackend implements SessionBackend {
     size: number,
     sha256Hex: string,
   ): Promise<void> {
-    try {
-      if (body instanceof Uint8Array) {
-        await this.bucket.put(key, body as unknown as ArrayBufferView, { sha256: sha256Hex });
-        return;
-      }
-      const stream = new FixedLengthStream(size);
-      const pumped = body.pipeTo(stream.writable);
-      const write = this.bucket.put(key, stream.readable, { sha256: sha256Hex });
-      const [pumpResult, writeResult] = await Promise.allSettled([pumped, write]);
-      if (writeResult.status === "rejected") throw writeResult.reason;
-      if (pumpResult.status === "rejected") throw pumpResult.reason;
-    } catch (error) {
-      if (isIntegrityError(error)) {
-        throw new ContentIntegrityError(error instanceof Error ? error.message : "integrity check failed");
-      }
-      throw error;
-    }
+    await putVerified(this.bucket, key, body, size, sha256Hex);
   }
 
   async deleteObject(key: string): Promise<void> {
@@ -275,12 +259,4 @@ function chunkOptions(url: URL): ChunkOptions {
   if (start !== null && end !== null) options.contentRange = { start: Number(start), end: Number(end) };
 
   return options;
-}
-
-function emptyStream(): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.close();
-    },
-  });
 }
