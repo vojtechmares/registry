@@ -7,6 +7,7 @@ import {
   isValidRepositoryName,
   sizeInvalid,
 } from "@registry/oci";
+import { commitBlob } from "../commit.js";
 import { emptyStream, errorResponse, parseContentRange, uploadRange } from "../http.js";
 import { ContentIntegrityError, eventsOf, policyOf } from "../ports.js";
 import type { BlobRecord, ChunkOptions, RegistryContext } from "../ports.js";
@@ -248,17 +249,11 @@ async function completeUpload(
 }
 
 /**
- * Records the blob and links it into this repository, in one commit.
- *
- * Deduplication happens here: if identical bytes were already stored under a
- * different key, the incumbent record comes back and we drop the object we just
- * wrote. Losing that race costs one wasted write, never a corrupt pointer.
+ * Records the blob, links it into this repository, and cleans up the object if
+ * it lost the dedup race - the shared commit path - then announces the push.
  */
 async function registerAndLink(ctx: RegistryContext, name: string, record: BlobRecord): Promise<void> {
-  const stored = await ctx.metadata.registerAndLinkBlob(name, record);
-  if (stored.storageKey !== record.storageKey) {
-    await ctx.content.delete(record.storageKey);
-  }
+  await commitBlob(ctx.metadata, ctx.content, name, record);
   eventsOf(ctx).blobPushed(name, { digest: record.digest, size: record.size });
 }
 

@@ -14,6 +14,7 @@ import { destinationFor, handleReplicateTask, localRegistry } from "../src/repli
 import { ReplicationStore } from "../src/replication/store.js";
 import { triggerReplication } from "../src/replication/trigger.js";
 import { TaskQueue } from "../src/tasks/queue.js";
+import { blobKey, stagingKey } from "../src/keys.js";
 import { basic, call, projectUsage, seedProject, seedRepository, seedUser } from "./helpers.js";
 
 const OWNER = { id: "repl-root", username: "replroot", password: "correct-horse-battery" };
@@ -514,5 +515,35 @@ describe("the replication rule API", () => {
       headers: { Authorization: basic("replnosy", "correct-horse-battery") },
     });
     expect(response.status).toBe(403);
+  });
+});
+
+describe("deduplicating a replicated blob's local write", () => {
+  it("deletes the object it wrote when the same bytes already won under another key", async () => {
+    await seedRepository("repl-dedup/app");
+
+    const bytes = new Uint8Array([9, 8, 7, 6, 5]);
+    const digest = await sha256(bytes);
+    const loserKey = blobKey(digest);
+    const winnerKey = stagingKey("dedup-incumbent");
+
+    // An incumbent already holds these exact bytes under a staging key - the
+    // shape a chunked upload leaves behind, whose key is not content-addressed.
+    await env.BUCKET.put(winnerKey, bytes as unknown as ArrayBuffer);
+    await env.DB.prepare("INSERT INTO blobs (digest, size, storage_key, created_at) VALUES (?, ?, ?, ?)")
+      .bind(digest, bytes.length, winnerKey, Date.now())
+      .run();
+
+    // The local write path stores its own object under the content-addressed
+    // key, then loses the dedup race to the incumbent.
+    await localRegistry(env).putBlob("repl-dedup/app", digest, {
+      body: new Response(bytes as unknown as BodyInit).body!,
+      size: bytes.length,
+    });
+
+    // Exactly one object survives: the incumbent. The losing write is cleaned up
+    // rather than leaked into content storage.
+    expect(await env.BUCKET.head(winnerKey)).not.toBeNull();
+    expect(await env.BUCKET.head(loserKey)).toBeNull();
   });
 });
