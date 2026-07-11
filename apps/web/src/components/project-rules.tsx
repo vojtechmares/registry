@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CleanupPolicy,
-  CleanupRule,
   NotificationPolicySummary,
   ReplicationRuleSummary,
+  TagsRule,
+  UntaggedRule,
 } from "@registry/api-contract";
 // The very engine the cron will run the filter with, so a pattern this form
 // accepts is one the scheduled cleanup accepts.
@@ -144,7 +145,7 @@ const FILTER_PLACEHOLDERS: Readonly<Record<FilterMode, string>> = {
   semver: "^1.2.3",
 };
 
-function modeOf(rule: CleanupRule | undefined): FilterMode {
+function modeOf(rule: TagsRule | undefined): FilterMode {
   if (rule === undefined) return "all";
   if (rule.tags.regex !== undefined && rule.tags.regex !== "") return "regex";
   if (rule.tags.semver !== undefined && rule.tags.semver !== "") return "semver";
@@ -152,7 +153,7 @@ function modeOf(rule: CleanupRule | undefined): FilterMode {
   return "all";
 }
 
-function valueOf(rule: CleanupRule | undefined, mode: FilterMode): string {
+function valueOf(rule: TagsRule | undefined, mode: FilterMode): string {
   if (rule === undefined || mode === "all") return "";
   return rule.tags[mode] ?? "";
 }
@@ -181,10 +182,14 @@ function filterError(mode: FilterMode, value: string): string | null {
  */
 function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }) {
   const queryClient = useQueryClient();
-  const stored = policy.rules[0];
+  // A rule with no kind is a tags rule; the untagged rule is told apart by kind.
+  const stored = policy.rules.find((entry): entry is TagsRule => entry.kind !== "untagged");
+  const storedUntagged = policy.rules.find((entry): entry is UntaggedRule => entry.kind === "untagged");
 
   const [schedule, setSchedule] = useState(policy.schedule);
-  const [repositories, setRepositories] = useState(stored?.repositories ?? "*");
+  const [repositories, setRepositories] = useState(
+    stored?.repositories ?? storedUntagged?.repositories ?? "*",
+  );
   const [mode, setMode] = useState<FilterMode>(modeOf(stored));
   const [filter, setFilter] = useState(valueOf(stored, modeOf(stored)));
   const [includePrerelease, setIncludePrerelease] = useState(stored?.tags.includePrerelease ?? false);
@@ -195,6 +200,8 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
       ? ""
       : String(stored.keepWithinDays),
   );
+  const [retireUntagged, setRetireUntagged] = useState(storedUntagged !== undefined);
+  const [untaggedDays, setUntaggedDays] = useState(String(storedUntagged?.olderThanDays ?? 30));
 
   const problem = filterError(mode, filter);
 
@@ -208,7 +215,7 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
     onError: (error) => toast.error(message(error, "Could not save")),
   });
 
-  const tagsOf = (): CleanupRule["tags"] => {
+  const tagsOf = (): TagsRule["tags"] => {
     if (mode === "all") return {};
     if (mode === "pattern") return { pattern: filter };
     if (mode === "regex") return { regex: filter };
@@ -258,20 +265,26 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
         onSubmit={(event) => {
           event.preventDefault();
           if (problem !== null) return;
+          const globbed = repositories === "" ? "*" : repositories;
+          const tagsRule: TagsRule = {
+            repositories: globbed,
+            tags: tagsOf(),
+            keepLast: Number(keepLast) || null,
+            keepWithinDays: Number(keepWithinDays) || null,
+            keepBy,
+          };
+          const untaggedRule: UntaggedRule = {
+            kind: "untagged",
+            repositories: globbed,
+            // Days must be a positive integer; an empty or zero field falls back to one.
+            olderThanDays: Number(untaggedDays) || 1,
+          };
           save.mutate({
             // Saving the first rule turns cleanup on; saving a change to a policy
             // that was deliberately switched off leaves it off.
             enabled: policy.enabled || policy.rules.length === 0,
             schedule,
-            rules: [
-              {
-                repositories: repositories === "" ? "*" : repositories,
-                tags: tagsOf(),
-                keepLast: Number(keepLast) || null,
-                keepWithinDays: Number(keepWithinDays) || null,
-                keepBy,
-              },
-            ],
+            rules: retireUntagged ? [tagsRule, untaggedRule] : [tagsRule],
           });
         }}
       >
@@ -405,6 +418,35 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
           A governed tag survives if either rule keeps it. Keeping nothing on both grounds deletes every tag
           the filter matches.
         </p>
+
+        <div className="space-y-2 rounded-md border p-4">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={retireUntagged}
+              onChange={(event) => setRetireUntagged(event.target.checked)}
+            />
+            Also retire untagged manifests
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Untagged manifests in the matched repositories are retired once they are older than the age below.
+            Signatures, SBOMs, and platform manifests inside an index are always kept.
+          </p>
+          {retireUntagged && (
+            <div className="space-y-2">
+              <Label htmlFor="untagged-days">Older than (days)</Label>
+              <Input
+                id="untagged-days"
+                type="number"
+                min="1"
+                className="w-40"
+                value={untaggedDays}
+                onChange={(event) => setUntaggedDays(event.target.value)}
+              />
+            </div>
+          )}
+        </div>
 
         <Button type="submit" disabled={save.isPending || problem !== null}>
           Save

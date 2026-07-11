@@ -275,6 +275,48 @@ describe("the cleanup card", () => {
     expect(screen.getByLabelText(/Keep within/i)).toHaveValue(30);
   });
 
+  it("saves an untagged rule alongside the tags rule", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByRole("checkbox", { name: /retire untagged manifests/i }));
+    const days = screen.getByLabelText(/Older than/i);
+    await user.clear(days);
+    await user.type(days, "14");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mocks.setCleanupPolicy).toHaveBeenCalledWith(
+      "acme",
+      expect.objectContaining({
+        rules: expect.arrayContaining([{ kind: "untagged", repositories: "*", olderThanDays: 14 }]),
+      }),
+    );
+  });
+
+  it("seeds the untagged section from a stored untagged rule", async () => {
+    mocks.cleanupPolicy.mockResolvedValue({
+      ...policy,
+      rules: [
+        { repositories: "*", tags: {}, keepLast: 5, keepWithinDays: null },
+        { kind: "untagged", repositories: "*", olderThanDays: 21 },
+      ],
+    });
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    expect(await screen.findByLabelText(/Older than/i)).toHaveValue(21);
+    expect(screen.getByRole("checkbox", { name: /retire untagged manifests/i })).toBeChecked();
+  });
+
+  it("does not send an untagged rule when the box is left unchecked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByRole("button", { name: "Save" }));
+
+    const [, sent] = mocks.setCleanupPolicy.mock.calls[0] as [string, { rules: Array<{ kind?: string }> }];
+    expect(sent.rules.some((entry) => entry.kind === "untagged")).toBe(false);
+  });
+
   it("leaves a deliberately disabled policy disabled when its schedule is edited", async () => {
     mocks.cleanupPolicy.mockResolvedValue({ ...policy, enabled: false, nextRunAt: null });
     const user = userEvent.setup();
