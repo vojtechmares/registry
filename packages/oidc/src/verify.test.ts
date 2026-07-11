@@ -207,6 +207,11 @@ describe("verifyIdToken", () => {
       reason: "no usable signing key",
     });
   });
+
+  it("rejects a token whose key id matches none the provider published", async () => {
+    const token = await signer.sign(validClaims, { kid: "a-key-nobody-published" });
+    expect((await verifyIdToken(token, [signer.key], options)).ok).toBe(false);
+  });
 });
 
 describe("PKCE", () => {

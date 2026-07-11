@@ -14,5 +14,9 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "jose": "^6.2.3",
+    "oauth4webapi": "^3.8.6"
   }
 }
