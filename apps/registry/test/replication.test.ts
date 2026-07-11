@@ -10,10 +10,13 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { seal, unseal } from "../src/crypto/sealed.js";
+import { NOTIFY_TASK, handleNotifyTask } from "../src/notifications/dispatch.js";
+import { NotificationStore } from "../src/notifications/store.js";
 import { destinationFor, handleReplicateTask, localRegistry } from "../src/replication/execute.js";
 import { ReplicationStore } from "../src/replication/store.js";
 import { triggerReplication } from "../src/replication/trigger.js";
 import { TaskQueue } from "../src/tasks/queue.js";
+import { runTask } from "../src/tasks/runner.js";
 import { blobKey, stagingKey } from "../src/keys.js";
 import { basic, call, projectUsage, seedProject, seedRepository, seedUser } from "./helpers.js";
 
@@ -545,5 +548,116 @@ describe("deduplicating a replicated blob's local write", () => {
     // rather than leaked into content storage.
     expect(await env.BUCKET.head(winnerKey)).not.toBeNull();
     expect(await env.BUCKET.head(loserKey)).toBeNull();
+  });
+});
+
+async function subscribeReplication(project: string, eventTypes: string[]): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO notification_policies
+       (id, project, name, enabled, target_type, target, secret, event_types, created_at, updated_at)
+     VALUES (?, ?, 'repl-hook', 1, 'webhook', 'https://example.com/repl', 'secret', ?, ?, ?)`,
+  )
+    .bind(crypto.randomUUID(), project, JSON.stringify(eventTypes), now, now)
+    .run();
+}
+
+async function createPullRule(project: string): Promise<string> {
+  const store = new ReplicationStore(env.DB, env.JWT_SECRET);
+  const rule = await store.create({
+    id: crypto.randomUUID(),
+    project,
+    name: "alpine",
+    direction: "pull",
+    remoteUrl: "https://remote.test",
+    credentials: null,
+    destinationNamespace: "",
+    repositoryFilter: "*",
+    sourceRepositories: ["library/alpine"],
+    tagFilter: { pattern: "v1" },
+    trigger: "manual",
+    schedule: null,
+  });
+  return rule.id;
+}
+
+/** Runs the notification deliveries a replication run queued. */
+async function drainNotifications(): Promise<void> {
+  const queue = new TaskQueue(env.DB);
+  for (const task of await queue.claim(20)) {
+    await runTask(queue, { [NOTIFY_TASK]: handleNotifyTask }, task, env);
+  }
+}
+
+describe("emitting the replication event", () => {
+  let hooks: string[] = [];
+
+  /** Routes the webhook to a capture and everything else to the stubbed upstream. */
+  function stubBoth(remote: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    hooks = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://example.com")) {
+        hooks.push(String(init?.body ?? ""));
+        return new Response(null, { status: 200 });
+      }
+      return remote(input, init);
+    });
+  }
+
+  it("delivers a replication event to a subscribed webhook when a run copies an artifact", async () => {
+    const source = await upstream();
+    stubBoth(source.handler);
+    await seedProject({ name: "repl-ev" });
+    await subscribeReplication("repl-ev", ["REPLICATION"]);
+    const ruleId = await createPullRule("repl-ev");
+
+    await handleReplicateTask({ ruleId }, env);
+    await drainNotifications();
+
+    expect(hooks).toHaveLength(1);
+    const payload = JSON.parse(hooks[0]!) as {
+      event: { type: string; data: { status: string; manifests: number } };
+    };
+    expect(payload.event.type).toBe("REPLICATION");
+    expect(payload.event.data.status).toBe("succeeded");
+    expect(payload.event.data.manifests).toBe(1);
+
+    const deliveries = await new NotificationStore(env.DB).deliveries("repl-ev", 10);
+    expect(deliveries[0]).toMatchObject({ eventType: "REPLICATION", status: "delivered" });
+  });
+
+  it("delivers a failure-describing event when the run fails", async () => {
+    const source = await upstream();
+    stubBoth(source.handler);
+    // A quota of one byte fails the copy, which the run reports as a failure.
+    await seedProject({ name: "repl-ev-fail", quotaBytes: 1 });
+    await subscribeReplication("repl-ev-fail", ["REPLICATION"]);
+    const ruleId = await createPullRule("repl-ev-fail");
+
+    await handleReplicateTask({ ruleId }, env);
+    await drainNotifications();
+
+    expect(hooks).toHaveLength(1);
+    const payload = JSON.parse(hooks[0]!) as {
+      event: { type: string; data: { status: string; error: string } };
+    };
+    expect(payload.event.type).toBe("REPLICATION");
+    expect(payload.event.data.status).toBe("failed");
+    expect(payload.event.data.error).toContain("quota");
+  });
+
+  it("sends nothing to a policy not subscribed to the replication type", async () => {
+    const source = await upstream();
+    stubBoth(source.handler);
+    await seedProject({ name: "repl-ev-none" });
+    await subscribeReplication("repl-ev-none", ["PUSH_ARTIFACT"]);
+    const ruleId = await createPullRule("repl-ev-none");
+
+    await handleReplicateTask({ ruleId }, env);
+    await drainNotifications();
+
+    expect(hooks).toHaveLength(0);
+    expect(await new NotificationStore(env.DB).deliveries("repl-ev-none", 10)).toHaveLength(0);
   });
 });
