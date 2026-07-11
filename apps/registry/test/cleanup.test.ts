@@ -619,4 +619,23 @@ describe("project attribution across lifecycle-event writers", () => {
     // The registry-global blob collection stays out of any single project's history.
     expect(actions).not.toContain("collect-blob");
   });
+
+  it("records no tag retirement in the history of a project that enforces immutability", async () => {
+    // The run consults the same guard the API's delete endpoints consult, so a
+    // frozen tag is refused and never reaches the project's cleanup history.
+    await seedRepository("attrib-imm/app", { name: "attrib-imm", immutableTags: true });
+    await seedTag("attrib-imm/app", "v1", 90);
+    await seedTag("attrib-imm/app", "v2", 90);
+    await policy("attrib-imm", [rule({ keepLast: 1 })]);
+
+    const [report] = await runDueCleanups(env, NOW);
+    expect(report?.tagsRemoved).toBe(0);
+
+    const response = await call("GET", "/api/v1/projects/attrib-imm/events", {
+      headers: { Authorization: auth },
+    });
+    const { events } = (await response.json()) as { events: Array<{ action: string }> };
+    expect(events.map((event) => event.action)).not.toContain("retire-tag");
+    expect(await tagsOf("attrib-imm/app")).toEqual(["v1", "v2"]);
+  });
 });
