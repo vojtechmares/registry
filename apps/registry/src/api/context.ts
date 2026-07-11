@@ -10,11 +10,13 @@ import type { Env } from "../env.js";
 import { NotificationStore } from "../notifications/store.js";
 import { REPLICATE_TASK } from "../replication/execute.js";
 import { ReplicationStore } from "../replication/store.js";
-import { AdminStore } from "../storage/admin.js";
 import { CleanupStore } from "../storage/cleanup.js";
 import { ProjectStore } from "../storage/projects.js";
+import { RepositoryStore } from "../storage/repositories.js";
 import { StatsStore } from "../storage/stats.js";
 import { TagIndex } from "../storage/tags.js";
+import { TokenStore } from "../storage/tokens.js";
+import { UserStore } from "../storage/users.js";
 import { TaskQueue } from "../tasks/queue.js";
 
 /** Where the management API lives. Also the prefix every OpenAPI path carries. */
@@ -23,7 +25,9 @@ export const PREFIX = "/api/v1";
 /** Everything a route reaches for, resolved once per request. */
 export interface Stores {
   readonly auth: AuthStore;
-  readonly admin: AdminStore;
+  readonly repositories: RepositoryStore;
+  readonly tokens: TokenStore;
+  readonly users: UserStore;
   readonly audit: AuditStore;
   readonly projects: ProjectStore;
   readonly tags: TagIndex;
@@ -73,7 +77,9 @@ export const withStores: MiddlewareHandler<ApiEnv> = async (c, next) => {
   c.set("secure", new URL(c.req.url).protocol === "https:");
   c.set("stores", {
     auth: new AuthStore(env.DB),
-    admin: new AdminStore(env.DB),
+    repositories: new RepositoryStore(env.DB),
+    tokens: new TokenStore(env.DB),
+    users: new UserStore(env.DB),
     audit: new AuditStore(env.DB),
     projects: new ProjectStore(env.DB),
     tags: new TagIndex(env.DB),

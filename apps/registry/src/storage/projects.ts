@@ -1,6 +1,7 @@
 import type { ProjectDetail, ProjectMember, ProjectSettings, ProjectSummary } from "@registry/api-contract";
 import type { Role, Visibility } from "@registry/projects";
 import { type Audience, visibleProjectsFilter } from "../visibility.js";
+import { deleteProjectContent, recomputeUsage } from "./cascade.js";
 import { flag, flagValue, roleOf } from "./codec.js";
 
 interface ProjectRow {
@@ -260,35 +261,12 @@ export class ProjectStore {
    */
   async remove(name: string): Promise<boolean> {
     const results = await this.db.batch([
-      this.db
-        .prepare("DELETE FROM tags WHERE repository IN (SELECT name FROM repositories WHERE project = ?)")
-        .bind(name),
-      this.db
-        .prepare(
-          "DELETE FROM manifest_blobs WHERE repository IN (SELECT name FROM repositories WHERE project = ?)",
-        )
-        .bind(name),
-      this.db
-        .prepare(
-          "DELETE FROM manifest_children WHERE repository IN (SELECT name FROM repositories WHERE project = ?)",
-        )
-        .bind(name),
-      this.db
-        .prepare(
-          "DELETE FROM manifests WHERE repository IN (SELECT name FROM repositories WHERE project = ?)",
-        )
-        .bind(name),
-      this.db
-        .prepare(
-          "DELETE FROM lifecycle_policies WHERE repository IN (SELECT name FROM repositories WHERE project = ?)",
-        )
-        .bind(name),
-      this.db.prepare("DELETE FROM repository_blobs WHERE project = ?").bind(name),
+      ...deleteProjectContent(this.db, name),
       this.db.prepare("DELETE FROM repositories WHERE project = ?").bind(name),
       this.db.prepare("DELETE FROM project_members WHERE project = ?").bind(name),
       this.db.prepare("DELETE FROM projects WHERE name = ?").bind(name),
     ]);
-    return (results[8]?.meta.changes ?? 0) > 0;
+    return (results[results.length - 1]?.meta.changes ?? 0) > 0;
   }
 
   async setMember(project: string, userId: string, role: Role): Promise<void> {
@@ -327,17 +305,6 @@ export class ProjectStore {
    * repository, collecting garbage - settles up here instead.
    */
   async recalculateUsage(project: string): Promise<void> {
-    await this.db
-      .prepare(
-        `UPDATE projects
-            SET used_bytes = COALESCE((
-                  SELECT SUM(b.size)
-                  FROM (SELECT DISTINCT digest FROM repository_blobs WHERE project = ?1) AS d
-                  JOIN blobs AS b ON b.digest = d.digest
-                ), 0)
-          WHERE name = ?1`,
-      )
-      .bind(project)
-      .run();
+    await recomputeUsage(this.db, project).run();
   }
 }

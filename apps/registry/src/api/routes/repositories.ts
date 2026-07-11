@@ -81,7 +81,7 @@ repositories.get(
 
     // The audience carries the pin, so a pinned token is confined to its project
     // by the visibility filter itself - the route restates neither rule nor pin.
-    const repositoryList = await storesOf(c).admin.listRepositories({
+    const repositoryList = await storesOf(c).repositories.listRepositories({
       search: query.search ?? null,
       project: query.project ?? null,
       limit: query.limit,
@@ -104,7 +104,7 @@ repositories.get(
   async (c) => {
     const { name } = c.req.valid("param");
     await authorizeFor(c)(name, "pull");
-    return c.json({ tags: await storesOf(c).admin.tags(name) });
+    return c.json({ tags: await storesOf(c).repositories.tags(name) });
   },
 );
 
@@ -126,7 +126,7 @@ repositories.get(
     const { name, digest } = c.req.valid("param");
     await authorizeFor(c)(name, "pull");
 
-    const detail = await storesOf(c).admin.manifest(name, digest);
+    const detail = await storesOf(c).repositories.manifest(name, digest);
     if (detail === null) throw notFound();
     return c.json(detail);
   },
@@ -146,7 +146,7 @@ repositories.get(
     const { name } = c.req.valid("param");
     await authorizeFor(c)(name, "pull");
 
-    const policy = await storesOf(c).admin.policy(name);
+    const policy = await storesOf(c).repositories.policy(name);
     return c.json(policy ?? { repository: name, enabled: false, keepLastTags: null, untaggedTtlDays: null });
   },
 );
@@ -170,7 +170,7 @@ repositories.put(
     const body = c.req.valid("json");
     const policy: LifecyclePolicy = { repository: name, ...body };
 
-    await storesOf(c).admin.setPolicy(policy);
+    await storesOf(c).repositories.setPolicy(policy);
     return c.json(policy);
   },
 );
@@ -212,7 +212,7 @@ repositories.get(
     const { name } = c.req.valid("param");
     await authorizeFor(c)(name, "pull");
 
-    const detail = await storesOf(c).admin.repository(name);
+    const detail = await storesOf(c).repositories.repository(name);
     if (detail === null) throw notFound(`repository "${name}" does not exist`);
     return c.json(detail);
   },
@@ -238,8 +238,8 @@ repositories.delete(
     await authorizeFor(c)(name, "delete");
     await refuseIfTagsAreImmutable(c, name);
 
-    const { admin, audit } = storesOf(c);
-    if (!(await admin.deleteRepository(name))) throw notFound();
+    const { repositories: repositoryStore, audit } = storesOf(c);
+    if (!(await repositoryStore.deleteRepository(name))) throw notFound();
 
     await audit.record({
       actor: actorOf(principal),

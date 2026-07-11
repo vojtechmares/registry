@@ -39,7 +39,7 @@ auth.post(
   validate("json", LoginBody),
   async (c) => {
     const { username, password } = c.req.valid("json");
-    const { auth: store, admin } = storesOf(c);
+    const { auth: store, users } = storesOf(c);
     const config = configOf(c);
 
     const principal = await authenticateCredentials(username, password, store, config);
@@ -52,7 +52,7 @@ auth.post(
     const identity = requireUser(principal);
 
     // Give the bootstrap administrator a real row so it can own access tokens.
-    if (identity.id === "bootstrap") await admin.ensureBootstrapUser(identity.username);
+    if (identity.id === "bootstrap") await users.ensureBootstrapUser(identity.username);
 
     return c.json({ id: identity.id, username: identity.username, isAdmin: identity.isAdmin }, 200, {
       "Set-Cookie": await createSessionCookie(identity, config, c.get("secure")),
@@ -171,7 +171,7 @@ auth.get(
       });
     }
 
-    const user = await storesOf(c).admin.findOrCreateOidcUser({
+    const user = await storesOf(c).users.findOrCreateOidcUser({
       issuer: claims.iss,
       subject: claims.sub,
       username: usernameFor(claims),
