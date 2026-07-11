@@ -1,8 +1,6 @@
-import type { Visibility } from "@registry/api-contract";
-import { canAdminister, type Role } from "@registry/projects";
+import { canAdminister } from "@registry/projects";
 import { actorOf, type AuditEntry } from "../../audit/store.js";
-import type { Identity, Principal } from "../../auth/principal.js";
-import { tokenProjectPin } from "../../auth/principal.js";
+import type { Identity } from "../../auth/principal.js";
 import { principalOf, storesOf, type ApiContext, type ApiMiddleware } from "../context.js";
 import { guard, requireUser } from "../guard.js";
 import { forbidden } from "../problem.js";
@@ -35,21 +33,6 @@ export async function requireProjectOwner(c: ApiContext, project: string): Promi
 export const projectOwner: ApiMiddleware = guard(async (c) => {
   await requireProjectOwner(c, c.req.param("project") ?? "");
 });
-
-/** Whether the caller may see the project at all. Mirrors the registry's own rule. */
-export function canView(
-  principal: Principal,
-  visibility: Visibility,
-  role: Role | null,
-  name: string,
-): boolean {
-  // A pinned token sees nothing outside its project, public or not.
-  const pin = tokenProjectPin(principal);
-  if (pin !== null && pin !== name) return false;
-  if (visibility === "public") return true;
-  if (principal.kind === "anonymous") return false;
-  return principal.identity.isAdmin || principal.identity.username === name || role !== null;
-}
 
 /**
  * Records a change to a project, or to something inside it.

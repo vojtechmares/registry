@@ -1,7 +1,8 @@
 import type { Authorize } from "@registry/registry-core";
-import { tokenProjectPin, viewerOf, type Principal } from "../auth/principal.js";
+import type { Principal } from "../auth/principal.js";
 import type { Env } from "../env.js";
 import { AdminStore } from "../storage/admin.js";
+import { audienceOf } from "../visibility.js";
 
 /** `GET /v2/_catalog` - the Docker catalog endpoint, outside the OCI spec but widely used. */
 export async function handleCatalog(
@@ -23,7 +24,7 @@ export async function handleCatalog(
   const last = url.searchParams.get("last");
 
   const admin = new AdminStore(env.DB);
-  const page = await admin.catalog(limit, last, viewerOf(principal), tokenProjectPin(principal));
+  const page = await admin.catalog(limit, last, audienceOf(principal));
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (page.hasMore && page.names.length > 0) {

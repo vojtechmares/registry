@@ -1,5 +1,6 @@
 import type { ProjectDetail, ProjectMember, ProjectSettings, ProjectSummary } from "@registry/api-contract";
 import { type Role, type Visibility, isRole } from "@registry/projects";
+import { type Audience, visibleProjectsFilter } from "../visibility.js";
 
 interface ProjectRow {
   name: string;
@@ -92,22 +93,14 @@ export class ProjectStore {
   }
 
   /**
-   * Projects the caller may see. An administrator sees every one; anyone else
-   * sees the public ones plus those they belong to, and the project named after
-   * them whether or not it exists as a membership.
+   * Projects the audience may see, through the one visibility rule. The join to
+   * `project_members` stays for the caller's own `role` in each row; the
+   * visibility filter itself is the module's, so this listing cannot drift from
+   * the catalog or the predicate.
    */
-  async list(viewer: { id: string; username: string; isAdmin: boolean } | null): Promise<ProjectSummary[]> {
-    const filters: string[] = [];
-    const bindings: unknown[] = [viewer?.id ?? null];
-
-    if (viewer === null) {
-      filters.push("p.visibility = 'public'");
-    } else if (!viewer.isAdmin) {
-      filters.push("(p.visibility = 'public' OR m.role IS NOT NULL OR p.name = ?)");
-      bindings.push(viewer.username);
-    }
-
-    const where = filters.length === 0 ? "" : `WHERE ${filters.join(" AND ")}`;
+  async list(audience: Audience): Promise<ProjectSummary[]> {
+    const filter = visibleProjectsFilter(audience, "p");
+    const where = filter === null ? "" : `WHERE ${filter.sql}`;
     const rows = await this.db
       .prepare(
         `SELECT ${COLUMNS}
@@ -116,7 +109,7 @@ export class ProjectStore {
          ${where}
          ORDER BY p.name ASC`,
       )
-      .bind(...bindings)
+      .bind(audience.viewer?.id ?? null, ...(filter?.bindings ?? []))
       .all<ProjectRow>();
 
     return rows.results.map(toSummary);
