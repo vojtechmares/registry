@@ -7,12 +7,16 @@
  */
 
 import { env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CleanupRule, TagsRule } from "@registry/api-contract";
 import { runDueCleanups } from "../src/lifecycle/cleanup.js";
 import { collectGarbage } from "../src/lifecycle/garbage-collector.js";
 import { runLifecycle } from "../src/lifecycle/policies.js";
+import { NOTIFY_TASK, handleNotifyTask } from "../src/notifications/dispatch.js";
+import { NotificationStore } from "../src/notifications/store.js";
 import { CleanupStore } from "../src/storage/cleanup.js";
+import { TaskQueue } from "../src/tasks/queue.js";
+import { runTask } from "../src/tasks/runner.js";
 import { blobKey } from "../src/keys.js";
 import { basic, call, deterministic, detail, seedProject, seedRepository, seedUser } from "./helpers.js";
 
@@ -637,5 +641,94 @@ describe("project attribution across lifecycle-event writers", () => {
     const { events } = (await response.json()) as { events: Array<{ action: string }> };
     expect(events.map((event) => event.action)).not.toContain("retire-tag");
     expect(await tagsOf("attrib-imm/app")).toEqual(["v1", "v2"]);
+  });
+});
+
+async function subscribeCleanup(project: string, eventTypes: string[]): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO notification_policies
+       (id, project, name, enabled, target_type, target, secret, event_types, created_at, updated_at)
+     VALUES (?, ?, 'clean-hook', 1, 'webhook', 'https://example.com/cleanup', 'secret', ?, ?, ?)`,
+  )
+    .bind(crypto.randomUUID(), project, JSON.stringify(eventTypes), now, now)
+    .run();
+}
+
+/** Runs the notification deliveries a cleanup run queued. */
+async function drainCleanupNotifications(): Promise<void> {
+  const queue = new TaskQueue(env.DB);
+  for (const task of await queue.claim(20)) {
+    await runTask(queue, { [NOTIFY_TASK]: handleNotifyTask }, task, env);
+  }
+}
+
+describe("emitting the cleanup summary event", () => {
+  let hooks: string[] = [];
+
+  function captureWebhook() {
+    hooks = [];
+    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+      hooks.push(String(init?.body ?? ""));
+      return new Response(null, { status: 200 });
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers one summary event to a subscribed webhook when a run retires a target", async () => {
+    captureWebhook();
+    await seedRepository("clean-ev/app");
+    await seedTag("clean-ev/app", "keep", 1);
+    await seedTag("clean-ev/app", "drop", 90);
+    await subscribeCleanup("clean-ev", ["CLEANUP"]);
+    await policy("clean-ev", [rule({ keepLast: 1 })]);
+
+    await runDueCleanups(env, NOW);
+    await drainCleanupNotifications();
+
+    // Exactly one event for the run, not one per deletion.
+    expect(hooks).toHaveLength(1);
+    const payload = JSON.parse(hooks[0]!) as {
+      event: { type: string; project: string; data: { tagsRemoved: number; untaggedRemoved: number } };
+    };
+    expect(payload.event.type).toBe("CLEANUP");
+    expect(payload.event.project).toBe("clean-ev");
+    expect(payload.event.data).toMatchObject({ tagsRemoved: 1, untaggedRemoved: 0 });
+
+    const deliveries = await new NotificationStore(env.DB).deliveries("clean-ev", 10);
+    expect(deliveries[0]).toMatchObject({ eventType: "CLEANUP", status: "delivered" });
+  });
+
+  it("emits nothing when a run retires nothing", async () => {
+    captureWebhook();
+    await seedRepository("clean-quiet/app");
+    await seedTag("clean-quiet/app", "v1", 1);
+    await subscribeCleanup("clean-quiet", ["CLEANUP"]);
+    // keepLast 5 keeps the single tag, so the run retires nothing.
+    await policy("clean-quiet", [rule({ keepLast: 5 })]);
+
+    await runDueCleanups(env, NOW);
+    await drainCleanupNotifications();
+
+    expect(hooks).toHaveLength(0);
+    expect(await new NotificationStore(env.DB).deliveries("clean-quiet", 10)).toHaveLength(0);
+  });
+
+  it("sends nothing to a policy not subscribed to the cleanup type", async () => {
+    captureWebhook();
+    await seedRepository("clean-none/app");
+    await seedTag("clean-none/app", "keep", 1);
+    await seedTag("clean-none/app", "drop", 90);
+    await subscribeCleanup("clean-none", ["PUSH_ARTIFACT"]);
+    await policy("clean-none", [rule({ keepLast: 1 })]);
+
+    await runDueCleanups(env, NOW);
+    await drainCleanupNotifications();
+
+    expect(hooks).toHaveLength(0);
+    expect(await new NotificationStore(env.DB).deliveries("clean-none", 10)).toHaveLength(0);
   });
 });
