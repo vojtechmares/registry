@@ -331,13 +331,30 @@ export const LifecyclePolicyBody = v.object({
 /** Bounds the work one scheduled cleanup can be asked to do. */
 export const MAX_CLEANUP_RULES = 32;
 
-export const CleanupRuleBody = v.object({
+const TagsRuleBody = v.object({
+  // Absent means a tags rule, so the stored shape written before untagged rules
+  // existed still parses as one. Sent explicitly, it must be the literal "tags".
+  kind: v.exactOptional(v.literal("tags")),
   repositories: nonEmpty("must be a non-empty glob"),
   tags: unset(TagCriteriaSchema, {}),
   keepLast: v.optional(nonNegativeOrNull, null),
   keepWithinDays: v.optional(nonNegativeOrNull, null),
   keepBy: v.exactOptional(v.picklist(["updated", "semver"] as const, 'must be "updated" or "semver"')),
 });
+
+const UntaggedRuleBody = v.object({
+  kind: v.literal("untagged"),
+  repositories: nonEmpty("must be a non-empty glob"),
+  // Retiring untagged manifests "older than 0 days" is a mistake, not a policy.
+  olderThanDays: v.pipe(
+    v.number("must be a positive integer"),
+    v.safeInteger("must be a positive integer"),
+    v.minValue(1, "must be a positive integer"),
+  ),
+});
+
+/** A rule is one of two kinds, told apart by `kind`; an absent `kind` is a tags rule. */
+export const CleanupRuleBody = v.variant("kind", [TagsRuleBody, UntaggedRuleBody]);
 
 export const CleanupPolicyBody = v.object({
   enabled: v.boolean("must be a boolean"),
@@ -602,13 +619,21 @@ export const CleanupPolicySchema = v.object({
   enabled: v.boolean(),
   schedule: v.string(),
   rules: v.array(
-    v.object({
-      repositories: v.string(),
-      tags: TagCriteriaSchema,
-      keepLast: v.nullable(v.number()),
-      keepWithinDays: v.nullable(v.number()),
-      keepBy: v.exactOptional(v.picklist(["updated", "semver"] as const)),
-    }),
+    v.variant("kind", [
+      v.object({
+        kind: v.exactOptional(v.literal("tags")),
+        repositories: v.string(),
+        tags: TagCriteriaSchema,
+        keepLast: v.nullable(v.number()),
+        keepWithinDays: v.nullable(v.number()),
+        keepBy: v.exactOptional(v.picklist(["updated", "semver"] as const)),
+      }),
+      v.object({
+        kind: v.literal("untagged"),
+        repositories: v.string(),
+        olderThanDays: v.number(),
+      }),
+    ]),
   ),
   untaggedOlderThanDays: v.nullable(v.number()),
   nextRunAt: v.nullable(timestamp),

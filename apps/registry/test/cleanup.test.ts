@@ -8,7 +8,7 @@
 
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { CleanupRule } from "@registry/api-contract";
+import type { CleanupRule, TagsRule } from "@registry/api-contract";
 import { runDueCleanups } from "../src/lifecycle/cleanup.js";
 import { collectGarbage } from "../src/lifecycle/garbage-collector.js";
 import { runLifecycle } from "../src/lifecycle/policies.js";
@@ -48,6 +48,13 @@ async function tagsOf(repository: string): Promise<string[]> {
   return rows.results.map((row) => row.name);
 }
 
+async function digestsOf(repository: string): Promise<string[]> {
+  const rows = await env.DB.prepare("SELECT digest FROM manifests WHERE repository = ? ORDER BY digest")
+    .bind(repository)
+    .all<{ digest: string }>();
+  return rows.results.map((row) => row.digest);
+}
+
 async function policy(
   project: string,
   rules: CleanupRule[],
@@ -58,12 +65,18 @@ async function policy(
   await store.put(project, { enabled: true, schedule: "0 3 * * *", rules, untaggedOlderThanDays }, NOW - DAY);
 }
 
-const rule = (overrides: Partial<CleanupRule> = {}): CleanupRule => ({
+const rule = (overrides: Partial<TagsRule> = {}): TagsRule => ({
   repositories: "*",
   tags: {},
   keepLast: null,
   keepWithinDays: null,
   ...overrides,
+});
+
+const untaggedRule = (repositories: string, olderThanDays: number): CleanupRule => ({
+  kind: "untagged",
+  repositories,
+  olderThanDays,
 });
 
 beforeAll(async () => {
@@ -267,6 +280,121 @@ describe("retiring untagged manifests", () => {
   });
 });
 
+describe("retiring untagged manifests by rule", () => {
+  async function seedManifest(
+    repository: string,
+    d: string,
+    daysOld: number,
+    fields: { subject?: string } = {},
+  ): Promise<void> {
+    const at = NOW - daysOld * DAY;
+    await env.DB.prepare(
+      `INSERT INTO manifests (repository, digest, media_type, artifact_type, size, subject_digest, annotations, created_at)
+       VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', NULL, 10, ?, NULL, ?)`,
+    )
+      .bind(repository, d, fields.subject ?? null, at)
+      .run();
+  }
+
+  async function tag(repository: string, name: string, d: string): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO tags (repository, name, manifest_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    )
+      .bind(repository, name, d, NOW, NOW)
+      .run();
+  }
+
+  it("retires an untagged manifest older than the rule's TTL, on the policy's schedule", async () => {
+    await seedRepository("urule-a/app");
+    await seedManifest("urule-a/app", digest("a"), 40);
+    await policy("urule-a", [untaggedRule("*", 30)]);
+
+    const [report] = await runDueCleanups(env, NOW);
+    expect(report?.untaggedRemoved).toBe(1);
+    expect(await digestsOf("urule-a/app")).toEqual([]);
+  });
+
+  it("keeps an untagged manifest younger than the rule's TTL", async () => {
+    await seedRepository("urule-b/app");
+    await seedManifest("urule-b/app", digest("b"), 10);
+    await policy("urule-b", [untaggedRule("*", 30)]);
+
+    const [report] = await runDueCleanups(env, NOW);
+    expect(report?.untaggedRemoved).toBe(0);
+    expect(await digestsOf("urule-b/app")).toEqual([digest("b")]);
+  });
+
+  it("retires only in the repositories the glob names", async () => {
+    await seedRepository("urule-c/named");
+    await seedRepository("urule-c/other");
+    await seedManifest("urule-c/named", digest("a"), 40);
+    await seedManifest("urule-c/other", digest("b"), 40);
+    await policy("urule-c", [untaggedRule("urule-c/named", 30)]);
+
+    await runDueCleanups(env, NOW);
+    expect(await digestsOf("urule-c/named")).toEqual([]);
+    // A sibling repository that never opted in keeps its untagged manifests.
+    expect(await digestsOf("urule-c/other")).toEqual([digest("b")]);
+  });
+
+  it("spares a signature, an index child, and a still-tagged manifest", async () => {
+    await seedRepository("urule-d/app");
+    const subject = digest("a");
+    const signature = digest("b");
+    const index = digest("c");
+    const child = digest("d");
+    const tagged = digest("e");
+    const plain = digest("f");
+
+    await seedManifest("urule-d/app", subject, 40);
+    await seedManifest("urule-d/app", signature, 40, { subject });
+    await seedManifest("urule-d/app", index, 40);
+    await seedManifest("urule-d/app", child, 40);
+    await seedManifest("urule-d/app", tagged, 40);
+    await seedManifest("urule-d/app", plain, 40);
+    await env.DB.prepare(
+      "INSERT INTO manifest_children (repository, manifest_digest, child_digest) VALUES (?, ?, ?)",
+    )
+      .bind("urule-d/app", index, child)
+      .run();
+    // A tag on the subject and the index is what keeps the signature and the child alive.
+    await tag("urule-d/app", "subj", subject);
+    await tag("urule-d/app", "idx", index);
+    await tag("urule-d/app", "live", tagged);
+    await policy("urule-d", [untaggedRule("*", 30)]);
+
+    await runDueCleanups(env, NOW);
+    // Only the plain untagged manifest goes.
+    expect(await digestsOf("urule-d/app")).toEqual([subject, signature, index, child, tagged].toSorted());
+  });
+
+  it("applies the minimum TTL when untagged rules overlap", async () => {
+    await seedRepository("urule-e/app");
+    await seedManifest("urule-e/app", digest("old"), 10);
+    await seedManifest("urule-e/app", digest("new"), 5);
+    await policy("urule-e", [untaggedRule("*", 30), untaggedRule("urule-e/*", 7)]);
+
+    await runDueCleanups(env, NOW);
+    // The stricter 7-day rule retires the 10-day manifest; the 5-day one survives.
+    expect(await digestsOf("urule-e/app")).toEqual([digest("new")]);
+  });
+
+  it("records the retirement in the project's history, attributed to the project", async () => {
+    await seedRepository("urule-f/app");
+    await seedManifest("urule-f/app", digest("a"), 40);
+    await policy("urule-f", [untaggedRule("*", 30)]);
+
+    await runDueCleanups(env, NOW);
+    const events = await new CleanupStore(env.DB).events("urule-f", 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: "retire-manifest",
+      subject: digest("a"),
+      repository: "urule-f/app",
+    });
+  });
+});
+
 describe("the cleanup policy API", () => {
   it("refuses a schedule that is not a cron expression", async () => {
     await seedProject({ name: "api-clean" });
@@ -351,8 +479,38 @@ describe("the cleanup policy API", () => {
     });
     expect(response.status).toBe(200);
 
-    const stored = (await response.json()) as { rules: CleanupRule[] };
+    const stored = (await response.json()) as { rules: TagsRule[] };
     expect(stored.rules[0]?.tags.regex).toBe("^nightly-\\d{8}$");
+  });
+
+  it("accepts and stores an untagged rule", async () => {
+    await seedProject({ name: "api-clean-untag" });
+    const response = await call("PUT", "/api/v1/projects/api-clean-untag/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        rules: [{ kind: "untagged", repositories: "*", olderThanDays: 30 }],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const stored = (await response.json()) as { rules: CleanupRule[] };
+    expect(stored.rules[0]?.kind).toBe("untagged");
+    expect(stored.rules[0]).toMatchObject({ kind: "untagged", repositories: "*", olderThanDays: 30 });
+  });
+
+  it("refuses an untagged rule whose TTL is not a positive integer", async () => {
+    await seedProject({ name: "api-clean-untag2" });
+    const response = await call("PUT", "/api/v1/projects/api-clean-untag2/cleanup", {
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        schedule: "0 3 * * *",
+        rules: [{ kind: "untagged", repositories: "*", olderThanDays: 0 }],
+      }),
+    });
+    expect(response.status).toBe(400);
   });
 
   it("refuses a rule with an empty repository glob", async () => {

@@ -1,6 +1,13 @@
 import { nextRun } from "@registry/cron";
 import { projectOf } from "@registry/projects";
-import { type CleanupRule, type TagState, evaluateCleanup } from "@registry/retention";
+import {
+  type CleanupRule,
+  type ManifestState,
+  type TagState,
+  effectiveUntaggedTtl,
+  evaluateCleanup,
+  evaluateUntagged,
+} from "@registry/retention";
 import type { Env } from "../env.js";
 
 const DAY_MS = 86_400_000;
@@ -86,10 +93,26 @@ async function runPolicy(env: Env, policy: PolicyRow, now: number): Promise<Clea
     }
   }
 
-  const untaggedRemoved =
+  // The project-level column sweeps every repository at one TTL; it is untouched
+  // here and folds into an untagged rule only when the lifecycle migration lands.
+  let untaggedRemoved =
     policy.untagged_older_than_days === null || policy.untagged_older_than_days <= 0
       ? 0
       : await retireUntagged(env, policy.project, policy.untagged_older_than_days, now);
+
+  // Untagged rules retire per repository, whatever the project's immutable-tags
+  // setting: an untagged manifest has no tag for that promise to protect.
+  for (const { name } of repositories.results) {
+    if (untaggedRemoved >= MAX_DELETIONS_PER_POLICY) break;
+    untaggedRemoved += await retireUntaggedByRule(
+      env,
+      policy.project,
+      name,
+      rules,
+      now,
+      MAX_DELETIONS_PER_POLICY - untaggedRemoved,
+    );
+  }
 
   const result = JSON.stringify({ tagsRemoved, untaggedRemoved });
   await env.DB.prepare("UPDATE cleanup_policies SET last_run_at = ?, last_result = ? WHERE project = ?")
@@ -184,4 +207,81 @@ async function retireUntagged(env: Env, project: string, ttlDays: number, now: n
   }
 
   return candidates.results.length;
+}
+
+/**
+ * Retires the untagged manifests an untagged rule governs in one repository.
+ *
+ * The rule package decides what is doomed: the effective TTL is the strictest of
+ * the overlapping rules, and a protected manifest is spared whatever the TTL. A
+ * manifest is protected when a tag still points at it, when it is a platform
+ * manifest inside an index that still exists, or when it is a signature or SBOM
+ * whose subject still exists - the same three protections the project-level sweep
+ * applies, so the two paths cannot drift.
+ */
+async function retireUntaggedByRule(
+  env: Env,
+  project: string,
+  repository: string,
+  rules: readonly CleanupRule[],
+  now: number,
+  budget: number,
+): Promise<number> {
+  const ttlDays = effectiveUntaggedTtl(repository, rules);
+  if (ttlDays === null) return 0;
+
+  const cutoff = now - ttlDays * DAY_MS;
+  const rows = await env.DB.prepare(
+    `SELECT m.digest, m.created_at AS pushed_at,
+            CASE WHEN EXISTS (
+              SELECT 1 FROM manifest_children AS c
+              JOIN manifests AS parent
+                ON parent.repository = c.repository AND parent.digest = c.manifest_digest
+              WHERE c.repository = m.repository AND c.child_digest = m.digest
+            ) OR EXISTS (
+              SELECT 1 FROM manifests AS subject
+              WHERE m.subject_digest IS NOT NULL
+                AND subject.repository = m.repository
+                AND subject.digest = m.subject_digest
+            ) THEN 1 ELSE 0 END AS protected_flag
+     FROM manifests AS m
+     WHERE m.repository = ?
+       AND m.created_at < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM tags AS t WHERE t.repository = m.repository AND t.manifest_digest = m.digest
+       )
+     LIMIT ?`,
+  )
+    .bind(repository, cutoff, budget)
+    .all<{ digest: string; pushed_at: number; protected_flag: number }>();
+
+  const manifests: ManifestState[] = rows.results.map((row) => ({
+    digest: row.digest,
+    pushedAt: row.pushed_at,
+    protected: row.protected_flag === 1,
+  }));
+
+  const doomed = evaluateUntagged({ repository, manifests, rules, now });
+  for (const manifest of doomed) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM manifest_blobs WHERE repository = ? AND manifest_digest = ?").bind(
+        repository,
+        manifest.name,
+      ),
+      env.DB.prepare("DELETE FROM manifest_children WHERE repository = ? AND manifest_digest = ?").bind(
+        repository,
+        manifest.name,
+      ),
+      env.DB.prepare("DELETE FROM manifests WHERE repository = ? AND digest = ?").bind(
+        repository,
+        manifest.name,
+      ),
+      env.DB.prepare(
+        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
+         VALUES (?, ?, 'retire-manifest', ?, ?, ?)`,
+      ).bind(project, repository, manifest.name, manifest.reason, now),
+    ]);
+  }
+
+  return doomed.length;
 }

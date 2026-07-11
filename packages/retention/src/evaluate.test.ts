@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CleanupRule, type TagState, evaluateCleanup } from "./evaluate.js";
+import { type CleanupRule, type TagState, type TagsRule, evaluateCleanup } from "./evaluate.js";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-07-10T00:00:00Z");
@@ -9,7 +9,7 @@ function tag(name: string, daysOld = 0): TagState {
 }
 
 /** A rule that governs every tag in every repository and keeps nothing. */
-function rule(overrides: Partial<CleanupRule> = {}): CleanupRule {
+function rule(overrides: Partial<TagsRule> = {}): TagsRule {
   return { repositories: "*", tags: {}, keepLast: null, keepWithinDays: null, ...overrides };
 }
 
@@ -108,6 +108,18 @@ describe("evaluateCleanup", () => {
     const tags = [tag("a", 1), tag("b", 2), tag("c", 3)];
     const rules = [rule({ keepLast: 1 })];
     expect(evaluate("acme/api", tags, rules)).toEqual(evaluate("acme/api", tags, rules));
+  });
+
+  it("treats a rule with no kind as a tags rule", () => {
+    // Stored rows written before the untagged kind existed carry no `kind`, and
+    // must keep meaning what they meant: a tags rule.
+    const rules: CleanupRule[] = [{ repositories: "*", tags: {}, keepLast: 1, keepWithinDays: null }];
+    expect(evaluate("acme/api", [tag("a", 1), tag("b", 2)], rules)).toEqual(["b"]);
+  });
+
+  it("ignores an untagged rule, which governs no tags", () => {
+    const rules: CleanupRule[] = [{ kind: "untagged", repositories: "*", olderThanDays: 1 }];
+    expect(evaluate("acme/api", [tag("a", 90), tag("b", 90)], rules)).toEqual([]);
   });
 });
 

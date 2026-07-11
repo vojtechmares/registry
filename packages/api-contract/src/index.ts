@@ -297,8 +297,13 @@ export interface TagCriteria {
   readonly includePrerelease?: boolean;
 }
 
-/** Which tags a cleanup rule governs, and how many of them it keeps. */
-export interface CleanupRule {
+/**
+ * Which tags a cleanup rule governs, and how many of them it keeps. `kind` is
+ * absent in rows written before the untagged kind existed, so an absent `kind`
+ * means a tags rule.
+ */
+export interface TagsRule {
+  readonly kind?: "tags";
   /** A glob over repository names within the project. `*` for all of them. */
   readonly repositories: string;
   readonly tags: TagCriteria;
@@ -307,6 +312,20 @@ export interface CleanupRule {
   /** How "newest" is decided when keeping the last `keepLast`. Defaults to update time. */
   readonly keepBy?: "updated" | "semver";
 }
+
+/**
+ * Retires untagged manifests older than a TTL in the repositories its glob
+ * matches. Scoped by repository so enabling it for one repository cannot sweep
+ * untagged manifests in siblings that never opted in.
+ */
+export interface UntaggedRule {
+  readonly kind: "untagged";
+  readonly repositories: string;
+  readonly olderThanDays: number;
+}
+
+/** One entry in a cleanup policy: either a tags rule or an untagged rule. */
+export type CleanupRule = TagsRule | UntaggedRule;
 
 export interface CleanupPolicy {
   readonly project: string;
@@ -509,13 +528,22 @@ export interface LifecyclePolicyInput {
   readonly untaggedTtlDays?: number | null | undefined;
 }
 
-export interface CleanupRuleInput {
+export interface TagsRuleInput {
+  readonly kind?: "tags";
   readonly repositories: string;
   readonly tags?: TagCriteria | null | undefined;
   readonly keepLast?: number | null | undefined;
   readonly keepWithinDays?: number | null | undefined;
   readonly keepBy?: "updated" | "semver";
 }
+
+export interface UntaggedRuleInput {
+  readonly kind: "untagged";
+  readonly repositories: string;
+  readonly olderThanDays: number;
+}
+
+export type CleanupRuleInput = TagsRuleInput | UntaggedRuleInput;
 
 export interface CleanupPolicyInput {
   readonly enabled: boolean;
