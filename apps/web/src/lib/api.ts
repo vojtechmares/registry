@@ -303,10 +303,13 @@ export const api = {
     project: string,
     input: { name: string; targetType: "webhook" | "email"; target: string; eventTypes: string[] },
   ) =>
-    request<{ id: string; secret?: string }>(`/projects/${encodeURIComponent(project)}/notifications`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<NotificationPolicySummary & { secret: string | null }>(
+      `/projects/${encodeURIComponent(project)}/notifications`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
 
   deleteNotification: (project: string, id: string) =>
     request<void>(`/projects/${encodeURIComponent(project)}/notifications/${encodeURIComponent(id)}`, {
@@ -331,7 +334,7 @@ export const api = {
     }),
 
   runReplicationRule: (project: string, id: string) =>
-    request<{ queued: boolean }>(
+    request<{ queued: boolean; rule: string }>(
       `/projects/${encodeURIComponent(project)}/replication/${encodeURIComponent(id)}`,
       { method: "POST", body: "{}" },
     ),

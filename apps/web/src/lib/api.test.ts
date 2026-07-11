@@ -212,12 +212,45 @@ describe("project endpoints", () => {
     expect(executionSpy.mock.calls[0]?.[0]).toBe("/api/v1/projects/acme/executions?limit=10");
   });
 
-  it("runs a replication rule now", async () => {
-    const fetchSpy = mockFetch({ status: 202, body: { queued: true } });
-    await api.runReplicationRule("acme", "r1");
+  it("runs a replication rule now and surfaces the queued rule id", async () => {
+    // The server queues the run and echoes the rule id, so the UI can name it.
+    const fetchSpy = mockFetch({ status: 202, body: { queued: true, rule: "r1" } });
+    const result = await api.runReplicationRule("acme", "r1");
+    expect(result.queued).toBe(true);
+    expect(result.rule).toBe("r1");
 
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/projects/acme/replication/r1");
+    expect(init.method).toBe("POST");
+  });
+
+  it("creates a notification policy and returns the full policy with its one-time secret", async () => {
+    // The true server shape: the complete created policy plus the signing secret,
+    // which is string-or-null (null for email targets, minted for webhooks).
+    const created = {
+      id: "n1",
+      project: "acme",
+      name: "webhook",
+      enabled: true,
+      targetType: "webhook",
+      target: "https://hooks.example/x",
+      eventTypes: ["PUSH_ARTIFACT"],
+      secret: "s3cr3t",
+    };
+    const fetchSpy = mockFetch({ status: 201, body: created });
+    const result = await api.createNotification("acme", {
+      name: "webhook",
+      targetType: "webhook",
+      target: "https://hooks.example/x",
+      eventTypes: ["PUSH_ARTIFACT"],
+    });
+    expect(result.name).toBe("webhook");
+    expect(result.enabled).toBe(true);
+    expect(result.target).toBe("https://hooks.example/x");
+    expect(result.secret).toBe("s3cr3t");
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/projects/acme/notifications");
     expect(init.method).toBe("POST");
   });
 });

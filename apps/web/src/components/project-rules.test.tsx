@@ -104,7 +104,7 @@ beforeEach(() => {
   mocks.deleteNotification.mockResolvedValue(undefined);
   mocks.replicationRules.mockResolvedValue([rule]);
   mocks.executions.mockResolvedValue([execution]);
-  mocks.runReplicationRule.mockResolvedValue({ queued: true });
+  mocks.runReplicationRule.mockResolvedValue({ queued: true, rule: "r1" });
   mocks.deleteReplicationRule.mockResolvedValue(undefined);
 });
 
