@@ -5,10 +5,16 @@
  * in the exact byte representation the client provided, so nothing here ever
  * re-serialises: we parse for validation and metadata extraction only. Second,
  * unknown fields MUST survive - the conformance suite deliberately pushes
- * manifests carrying a `newUnspecifiedField` - so validation is a whitelist of
- * the fields we care about, never a rejection of the fields we do not.
+ * manifests carrying a `newUnspecifiedField` - so the schemas below are loose
+ * objects, which ignore the fields we do not name rather than rejecting them.
+ *
+ * The untrusted document is validated with Valibot against the OCI image
+ * manifest, image index, and descriptor shapes; a schema failure becomes the
+ * distribution-spec `MANIFEST_INVALID`. Structure, not the advisory media type,
+ * decides which shape applies.
  */
 
+import * as v from "valibot";
 import { isValidDigest } from "./digest.js";
 import { manifestInvalid } from "./errors.js";
 import { MEDIA_TYPE_OCI_INDEX, MEDIA_TYPE_OCI_MANIFEST, stripMediaTypeParameters } from "./media-types.js";
@@ -45,62 +51,78 @@ export interface ImageIndex extends ManifestCommon {
 
 export type Manifest = ImageManifest | ImageIndex;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/* -------------------------------------------------------------------------- */
+/* Schemas                                                                     */
+/*                                                                            */
+/* Loose objects: a field we do not name is ignored, never rejected, so the   */
+/* stored bytes keep whatever the client sent. The optional metadata is        */
+/* `nullish`, matching the predecessor's tolerance of a field sent as `null`.  */
+/* -------------------------------------------------------------------------- */
+
+const annotationsSchema = v.record(v.string(), v.string("annotation values must be strings"));
+
+const descriptorSchema = v.object({
+  mediaType: v.string("mediaType must be a string"),
+  digest: v.pipe(v.string(), v.check(isValidDigest, "digest must be a valid, supported digest")),
+  size: v.pipe(
+    v.number("size must be a non-negative integer"),
+    v.integer("size must be a non-negative integer"),
+    v.minValue(0, "size must be a non-negative integer"),
+  ),
+  urls: v.nullish(v.array(v.string("urls must be an array of strings"))),
+  annotations: v.nullish(annotationsSchema),
+  artifactType: v.nullish(v.string()),
+});
+
+const commonEntries = {
+  schemaVersion: v.literal(2, "schemaVersion must be 2"),
+  mediaType: v.nullish(v.string()),
+  artifactType: v.nullish(v.string()),
+  subject: v.nullish(descriptorSchema),
+  annotations: v.nullish(annotationsSchema),
+} as const;
+
+const imageManifestSchema = v.object({
+  ...commonEntries,
+  config: descriptorSchema,
+  layers: v.nullish(v.array(descriptorSchema)),
+});
+
+const imageIndexSchema = v.object({
+  ...commonEntries,
+  manifests: v.array(descriptorSchema, "manifests must be an array"),
+});
+
+type ValidatedDescriptor = v.InferOutput<typeof descriptorSchema>;
+
+/** Runs a schema, turning the first failure into the distribution-spec error. */
+function validate<Schema extends v.GenericSchema>(schema: Schema, document: unknown): v.InferOutput<Schema> {
+  const result = v.safeParse(schema, document);
+  if (result.success) return result.output;
+  const issue = result.issues[0];
+  const path = issue === undefined ? null : v.getDotPath(issue);
+  throw manifestInvalid(
+    path === null ? (issue?.message ?? "manifest is invalid") : `${path}: ${issue!.message}`,
+  );
 }
 
-function parseAnnotations(value: unknown, where: string): Record<string, string> | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (!isRecord(value)) throw manifestInvalid(`${where}: annotations must be an object`);
-  const out: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") throw manifestInvalid(`${where}: annotation "${key}" must be a string`);
-    out[key] = entry;
-  }
-  return out;
+/** A field's value only when it carries one; a null, undefined, or empty string is no value. */
+function present(value: string | null | undefined): string | undefined {
+  return value === undefined || value === null || value === "" ? undefined : value;
 }
 
-function parseDescriptor(value: unknown, where: string): Descriptor {
-  if (!isRecord(value)) throw manifestInvalid(`${where}: descriptor must be an object`);
-
-  const { mediaType, digest, size, urls, artifactType } = value;
-  if (typeof mediaType !== "string") throw manifestInvalid(`${where}: mediaType must be a string`);
-  if (typeof digest !== "string" || !isValidDigest(digest)) {
-    throw manifestInvalid(`${where}: digest must be a valid, supported digest`);
-  }
-  if (typeof size !== "number" || !Number.isInteger(size) || size < 0) {
-    throw manifestInvalid(`${where}: size must be a non-negative integer`);
-  }
-
-  const descriptor: {
-    -readonly [K in keyof Descriptor]: Descriptor[K];
-  } = { mediaType, digest, size };
-
-  if (urls !== undefined && urls !== null) {
-    if (!Array.isArray(urls) || urls.some((url) => typeof url !== "string")) {
-      throw manifestInvalid(`${where}: urls must be an array of strings`);
-    }
-    descriptor.urls = urls as string[];
-  }
-  if (artifactType !== undefined && artifactType !== null) {
-    if (typeof artifactType !== "string") throw manifestInvalid(`${where}: artifactType must be a string`);
-    descriptor.artifactType = artifactType;
-  }
-  const annotations = parseAnnotations(value.annotations, where);
-  if (annotations !== undefined) descriptor.annotations = annotations;
-
+/** The validated descriptor, with the absent optionals dropped rather than left undefined. */
+function toDescriptor(validated: ValidatedDescriptor): Descriptor {
+  const descriptor: { -readonly [K in keyof Descriptor]: Descriptor[K] } = {
+    mediaType: validated.mediaType,
+    digest: validated.digest,
+    size: validated.size,
+  };
+  if (validated.urls != null) descriptor.urls = validated.urls;
+  // A descriptor keeps an empty artifactType, unlike the manifest-level one.
+  if (validated.artifactType != null) descriptor.artifactType = validated.artifactType;
+  if (validated.annotations != null) descriptor.annotations = validated.annotations;
   return descriptor;
-}
-
-function parseDescriptorArray(value: unknown, where: string): Descriptor[] {
-  if (!Array.isArray(value)) throw manifestInvalid(`${where} must be an array`);
-  return value.map((entry, index) => parseDescriptor(entry, `${where}[${index}]`));
-}
-
-function optionalString(value: unknown, where: string): string | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  if (typeof value !== "string") throw manifestInvalid(`${where} must be a string`);
-  return value;
 }
 
 /**
@@ -117,51 +139,45 @@ export function parseManifest(body: Uint8Array, contentType?: string): Manifest 
   } catch {
     throw manifestInvalid("manifest is not valid JSON");
   }
-  if (!isRecord(document)) throw manifestInvalid("manifest must be a JSON object");
-
-  if (document.schemaVersion !== 2) {
-    throw manifestInvalid("schemaVersion must be 2");
+  if (typeof document !== "object" || document === null || Array.isArray(document)) {
+    throw manifestInvalid("manifest must be a JSON object");
   }
 
-  const declared = optionalString(document.mediaType, "mediaType");
   const fromHeader =
     contentType === undefined ? undefined : stripMediaTypeParameters(contentType) || undefined;
 
-  const artifactType = optionalString(document.artifactType, "artifactType");
-  const annotations = parseAnnotations(document.annotations, "manifest");
-  const subject =
-    document.subject === undefined || document.subject === null
-      ? undefined
-      : parseDescriptor(document.subject, "subject");
-
   // Structure decides the kind: an index has `manifests`, an image manifest has
   // `config`. Media types are advisory and clients get them wrong.
-  if (document.manifests !== undefined) {
-    const manifests = parseDescriptorArray(document.manifests, "manifests");
+  const record = document as Record<string, unknown>;
+  if (record.manifests !== undefined) {
+    const parsed = validate(imageIndexSchema, document);
     const index: { -readonly [K in keyof ImageIndex]: ImageIndex[K] } = {
       kind: "index",
-      mediaType: declared ?? fromHeader ?? MEDIA_TYPE_OCI_INDEX,
-      manifests,
+      mediaType: present(parsed.mediaType) ?? fromHeader ?? MEDIA_TYPE_OCI_INDEX,
+      manifests: parsed.manifests.map(toDescriptor),
     };
+    const artifactType = present(parsed.artifactType);
     if (artifactType !== undefined) index.artifactType = artifactType;
-    if (subject !== undefined) index.subject = subject;
-    if (annotations !== undefined) index.annotations = annotations;
+    if (parsed.subject != null) index.subject = toDescriptor(parsed.subject);
+    if (parsed.annotations != null) index.annotations = parsed.annotations;
     return index;
   }
 
-  if (document.config === undefined) {
+  if (record.config === undefined) {
     throw manifestInvalid("manifest must contain either `config` or `manifests`");
   }
 
+  const parsed = validate(imageManifestSchema, document);
   const image: { -readonly [K in keyof ImageManifest]: ImageManifest[K] } = {
     kind: "image",
-    mediaType: declared ?? fromHeader ?? MEDIA_TYPE_OCI_MANIFEST,
-    config: parseDescriptor(document.config, "config"),
-    layers: parseDescriptorArray(document.layers ?? [], "layers"),
+    mediaType: present(parsed.mediaType) ?? fromHeader ?? MEDIA_TYPE_OCI_MANIFEST,
+    config: toDescriptor(parsed.config),
+    layers: (parsed.layers ?? []).map(toDescriptor),
   };
+  const artifactType = present(parsed.artifactType);
   if (artifactType !== undefined) image.artifactType = artifactType;
-  if (subject !== undefined) image.subject = subject;
-  if (annotations !== undefined) image.annotations = annotations;
+  if (parsed.subject != null) image.subject = toDescriptor(parsed.subject);
+  if (parsed.annotations != null) image.annotations = parsed.annotations;
   return image;
 }
 
