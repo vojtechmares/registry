@@ -2,6 +2,7 @@ import { nextRun } from "@registry/cron";
 import type { Direction, ReplicationRule, Trigger } from "@registry/replication";
 import type { TagFilter } from "@registry/semver";
 import { seal, unseal } from "../crypto/sealed.js";
+import { flag, jsonColumn } from "../storage/codec.js";
 
 interface RuleRow {
   id: string;
@@ -27,26 +28,18 @@ const COLUMNS = `id, project, name, enabled, direction, remote_url, remote_usern
                  destination_namespace, repository_filter, source_repositories, tag_filter,
                  trigger, schedule, next_run_at, last_run_at, last_result`;
 
-function json<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function toRule(row: RuleRow): ReplicationRule {
   return {
     id: row.id,
     project: row.project,
     name: row.name,
-    enabled: row.enabled === 1,
+    enabled: flag(row.enabled),
     direction: row.direction,
     remoteUrl: row.remote_url,
     destinationNamespace: row.destination_namespace,
     repositoryFilter: row.repository_filter,
-    sourceRepositories: json<string[]>(row.source_repositories, []),
-    tagFilter: json<TagFilter>(row.tag_filter, {}),
+    sourceRepositories: jsonColumn<string[]>(row.source_repositories, []),
+    tagFilter: jsonColumn<TagFilter>(row.tag_filter, {}),
     trigger: row.trigger,
     schedule: row.schedule,
   };

@@ -1,5 +1,6 @@
 import type { CleanupPolicy, CleanupRule } from "@registry/api-contract";
 import { nextRun } from "@registry/cron";
+import { flag, flagValue, jsonColumn } from "./codec.js";
 
 interface PolicyRow {
   project: string;
@@ -12,25 +13,16 @@ interface PolicyRow {
   last_result: string | null;
 }
 
-function json<T>(raw: string | null, fallback: T): T {
-  if (raw === null) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function toPolicy(row: PolicyRow): CleanupPolicy {
   return {
     project: row.project,
-    enabled: row.enabled === 1,
+    enabled: flag(row.enabled),
     schedule: row.schedule,
-    rules: json<CleanupRule[]>(row.rules, []),
+    rules: jsonColumn<CleanupRule[]>(row.rules, []),
     untaggedOlderThanDays: row.untagged_older_than_days,
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at,
-    lastResult: json<CleanupPolicy["lastResult"]>(row.last_result, null),
+    lastResult: jsonColumn<CleanupPolicy["lastResult"]>(row.last_result, null),
   };
 }
 
@@ -82,7 +74,7 @@ export class CleanupStore {
       )
       .bind(
         project,
-        input.enabled ? 1 : 0,
+        flagValue(input.enabled),
         input.schedule,
         JSON.stringify(input.rules),
         input.untaggedOlderThanDays,

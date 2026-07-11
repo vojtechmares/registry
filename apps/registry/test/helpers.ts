@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import type { ProblemDetails } from "@registry/api-contract";
 import { type Role, projectOf } from "@registry/projects";
 import { hashPassword } from "../src/auth/password.js";
+import { flagValue } from "../src/storage/codec.js";
 
 /** The origin is arbitrary; only the path and query reach the router. */
 const BASE = "https://registry.test";
@@ -55,7 +56,7 @@ export async function seedUser(options: SeedUserOptions): Promise<void> {
       options.id,
       options.username,
       await hashPassword(options.password),
-      options.isAdmin ? 1 : 0,
+      flagValue(options.isAdmin ?? false),
       now,
       now,
     )
@@ -105,9 +106,9 @@ export async function seedProject(options: SeedProjectOptions): Promise<void> {
       options.name,
       options.visibility ?? "private",
       options.quotaBytes ?? null,
-      options.requireSignaturePush === true ? 1 : 0,
-      options.requireSignaturePull === true ? 1 : 0,
-      options.immutableTags === true ? 1 : 0,
+      flagValue(options.requireSignaturePush === true),
+      flagValue(options.requireSignaturePull === true),
+      flagValue(options.immutableTags === true),
       now,
       now,
     )
