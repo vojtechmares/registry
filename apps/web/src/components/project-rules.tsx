@@ -441,10 +441,9 @@ function NotificationsCard({ name }: { name: string }) {
         eventTypes: ["PUSH_ARTIFACT", "DELETE_ARTIFACT"],
       }),
     onSuccess: (result) => {
-      toast.success(
-        result.secret === undefined ? "Webhook added" : `Webhook added. Secret: ${result.secret}`,
-        { duration: 12_000 },
-      );
+      toast.success(result.secret === null ? "Webhook added" : `Webhook added. Secret: ${result.secret}`, {
+        duration: 12_000,
+      });
       setUrl("");
       invalidate();
     },
