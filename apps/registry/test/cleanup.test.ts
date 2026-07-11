@@ -10,8 +10,11 @@ import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { CleanupRule } from "@registry/api-contract";
 import { runDueCleanups } from "../src/lifecycle/cleanup.js";
+import { collectGarbage } from "../src/lifecycle/garbage-collector.js";
+import { runLifecycle } from "../src/lifecycle/policies.js";
 import { CleanupStore } from "../src/storage/cleanup.js";
-import { basic, call, detail, seedProject, seedRepository, seedUser } from "./helpers.js";
+import { blobKey } from "../src/keys.js";
+import { basic, call, deterministic, detail, seedProject, seedRepository, seedUser } from "./helpers.js";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-07-10T00:00:00Z");
@@ -400,5 +403,62 @@ describe("the cleanup policy API", () => {
       headers: { Authorization: basic("outsider", "correct-horse-battery") },
     });
     expect(response.status).toBe(403);
+  });
+});
+
+describe("project attribution across lifecycle-event writers", () => {
+  const PROJECT = "attrib";
+  const REPO = "attrib/app";
+
+  it("surfaces retirements from every project-scoped writer in the cleanup history, but never a global blob collection", async () => {
+    await seedRepository(REPO);
+
+    // Writer 1 - the per-repository lifecycle engine. An untagged manifest past
+    // the policy's TTL is retired; the resulting event must carry its project.
+    const orphanManifest = `sha256:${"c".repeat(64)}`;
+    await env.DB.prepare(
+      `INSERT INTO manifests (repository, digest, media_type, artifact_type, size, subject_digest, annotations, created_at)
+       VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', NULL, 4, NULL, NULL, ?)`,
+    )
+      .bind(REPO, orphanManifest, NOW - 400 * DAY)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO lifecycle_policies (repository, enabled, keep_last_tags, untagged_ttl_days, updated_at) VALUES (?, 1, NULL, 7, ?)",
+    )
+      .bind(REPO, NOW)
+      .run();
+    await runLifecycle(env);
+
+    // Writer 2 - the project cleanup engine. One tag beyond the newest is retired.
+    await seedTag(REPO, "keep", 1);
+    await seedTag(REPO, "drop", 90);
+    await policy(PROJECT, [rule({ keepLast: 1 })]);
+    await runDueCleanups(env, NOW);
+
+    // Writer 3 - the garbage collector. A blob no repository links is reclaimed;
+    // it is content-addressed and registry-global, so it belongs to no project.
+    const orphanBlob = `sha256:${"d".repeat(64)}`;
+    const key = blobKey(orphanBlob);
+    await env.DB.prepare("INSERT INTO blobs (digest, size, storage_key, created_at) VALUES (?, 8, ?, ?)")
+      .bind(orphanBlob, key, NOW - DAY)
+      .run();
+    await env.BUCKET.put(key, deterministic(8) as unknown as ArrayBuffer);
+    await collectGarbage(env);
+
+    // The project owner reads the history the management API exposes.
+    const response = await call("GET", `/api/v1/projects/${PROJECT}/events`, {
+      headers: { Authorization: auth },
+    });
+    expect(response.status).toBe(200);
+    const { events } = (await response.json()) as {
+      events: Array<{ action: string; subject: string; repository: string | null }>;
+    };
+    const actions = events.map((event) => event.action);
+
+    // Both project-scoped engines appear, attributed to the project.
+    expect(actions).toContain("retire-manifest");
+    expect(actions).toContain("retire-tag");
+    // The registry-global blob collection stays out of any single project's history.
+    expect(actions).not.toContain("collect-blob");
   });
 });
