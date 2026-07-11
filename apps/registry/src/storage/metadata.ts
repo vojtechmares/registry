@@ -86,14 +86,6 @@ export class D1MetadataStore implements MetadataStore {
     ]);
   }
 
-  async getBlob(digest: string): Promise<BlobRecord | null> {
-    const row = await this.db
-      .prepare("SELECT digest, size, storage_key FROM blobs WHERE digest = ?")
-      .bind(digest)
-      .first<BlobRow>();
-    return row === null ? null : { digest: row.digest, size: row.size, storageKey: row.storage_key };
-  }
-
   async repositoriesLinkingBlob(digest: string, limit: number): Promise<string[]> {
     const rows = await this.db
       .prepare("SELECT repository FROM repository_blobs WHERE digest = ? ORDER BY repository LIMIT ?")
@@ -195,9 +187,15 @@ export class D1MetadataStore implements MetadataStore {
       this.chargeProject(project, record.digest, token),
     ]);
 
-    // Safe to read after the fact: the link now exists, so nothing may delete the row.
-    const stored = await this.getBlob(record.digest);
-    return stored ?? record;
+    // Safe to read after the fact: the link now exists, so nothing may delete the
+    // row. The winning storage key may differ from the one just written - a prior
+    // chunked upload keeps its staging key - which is what tells a losing writer
+    // to drop the object it produced.
+    const row = await this.db
+      .prepare("SELECT digest, size, storage_key FROM blobs WHERE digest = ?")
+      .bind(record.digest)
+      .first<BlobRow>();
+    return row === null ? record : { digest: row.digest, size: row.size, storageKey: row.storage_key };
   }
 
   /**

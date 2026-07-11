@@ -5,7 +5,8 @@
   "type": "module",
   "description": "OCI distribution API, independent of any storage backend",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./conformance": "./test/conformance-suite.ts"
   },
   "scripts": {
     "test": "vitest run",
