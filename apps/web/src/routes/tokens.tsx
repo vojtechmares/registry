@@ -25,7 +25,12 @@ import { sessionReady, sessionStore } from "@/store/session";
  * is minted from that project's page, where the scopes it may be given are the
  * ones the project can grant. This page exists to find and revoke them.
  */
-function Tokens() {
+/** The redirect decision the route guard makes: a signed-out visitor goes to the sign-in page. */
+export function requireSession(): void {
+  if (sessionStore.state.user === null) throw redirect({ to: "/login" });
+}
+
+export function Tokens() {
   const queryClient = useQueryClient();
   const { data, isPending } = useQuery({ queryKey: keys.tokens(), queryFn: api.tokens });
 
@@ -126,7 +131,7 @@ export const tokensRoute = createRoute({
   path: "/settings/tokens",
   beforeLoad: async () => {
     await sessionReady;
-    if (sessionStore.state.user === null) throw redirect({ to: "/login" });
+    requireSession();
   },
   component: Tokens,
 });

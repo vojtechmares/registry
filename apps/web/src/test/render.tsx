@@ -22,12 +22,9 @@ export function renderWithProviders(ui: ReactNode): RenderResult {
 
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => <>{ui}</> });
-  // Declared so `<Link to="/r/$">` resolves; never navigated to.
-  const repositoryRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/r/$",
-    component: () => null,
-  });
+  // Declared so a mounted page's `<Link>` resolves; none is ever navigated to.
+  const stub = (path: string) =>
+    createRoute({ getParentRoute: () => rootRoute, path, component: () => null });
   const manifestRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/manifest",
@@ -39,7 +36,16 @@ export function renderWithProviders(ui: ReactNode): RenderResult {
   });
 
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, repositoryRoute, manifestRoute]),
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      manifestRoute,
+      stub("/r/$"),
+      stub("/projects"),
+      stub("/projects/$name"),
+      stub("/settings/tokens"),
+      stub("/admin"),
+      stub("/login"),
+    ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
 

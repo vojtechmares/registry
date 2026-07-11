@@ -86,7 +86,7 @@ function CreateProject() {
   );
 }
 
-function Projects() {
+export function Projects() {
   const { user } = useStore(sessionStore);
   const { data, isPending } = useQuery({ queryKey: keys.projects(), queryFn: api.projects });
 

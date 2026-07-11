@@ -21,10 +21,7 @@ import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
 import { sessionStore } from "@/store/session";
 
-function Repository() {
-  // A splat is optional as far as the router's types are concerned; an empty
-  // repository name simply fails the lookup below.
-  const name = repositoryRoute.useParams()._splat ?? "";
+export function Repository({ name }: { name: string }) {
   const { user } = useStore(sessionStore);
 
   const { data, isPending, error } = useQuery({
@@ -157,5 +154,10 @@ export const repositoryRoute = createRoute({
   getParentRoute: () => rootRoute,
   // A repository name contains slashes, so it must be a splat.
   path: "/r/$",
-  component: Repository,
+  component: function RepositoryRoute() {
+    // A splat is optional as far as the router's types are concerned; an empty
+    // repository name simply fails the lookup inside.
+    const name = repositoryRoute.useParams()._splat ?? "";
+    return <Repository name={name} />;
+  },
 });

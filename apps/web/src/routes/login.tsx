@@ -10,7 +10,7 @@ import { ApiError, api } from "@/lib/api";
 import { rootRoute } from "@/routes/root";
 import { setSessionUser } from "@/store/session";
 
-function Login() {
+export function Login() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
