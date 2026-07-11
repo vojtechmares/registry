@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Event payloads, HMAC-signed webhooks, and email rendering",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./event": "./src/event.ts"
   },
   "scripts": {
     "test": "vitest run",

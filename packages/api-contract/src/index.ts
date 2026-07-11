@@ -5,6 +5,13 @@
  * them directly rather than restating the shapes.
  */
 
+// Type-only, so the contract stays runtime-free (ADR-0001): the notifications
+// package owns the event vocabulary, and this contract derives its union from
+// it rather than hand-mirroring it. The `/event` subpath is the dependency-free
+// vocabulary module, so nothing runtime - not even a transitive type - crosses
+// this import.
+import type { EventType } from "@registry/notifications/event";
+
 export type Visibility = "public" | "private";
 export type Action = "pull" | "push" | "delete";
 export type Role = "guest" | "developer" | "maintainer" | "owner";
@@ -344,14 +351,13 @@ export interface AuthProviders {
   readonly oidc: boolean;
 }
 
-/** What the registry tells an outside listener about. */
-export type NotificationEventType =
-  | "PUSH_ARTIFACT"
-  | "PULL_ARTIFACT"
-  | "DELETE_ARTIFACT"
-  | "QUOTA_EXCEEDED"
-  | "REPLICATION"
-  | "CLEANUP";
+/**
+ * What the registry tells an outside listener about.
+ *
+ * Derived from the single source in `@registry/notifications`, so a type added
+ * or removed there changes here - and in the dashboard - without a hand edit.
+ */
+export type NotificationEventType = EventType;
 
 export type NotificationTargetType = "webhook" | "email";
 
