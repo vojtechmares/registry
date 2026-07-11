@@ -16,25 +16,43 @@
 
 import type {
   AccessTokenSummary,
+  AddMemberInput,
   AuditEvent,
   AuditPage,
   AuthProviders,
+  CleanupEvent,
   CleanupPolicy,
+  CleanupPolicyInput,
   CreatedAccessToken,
+  CreatedNotificationPolicy,
+  CreateNotificationInput,
+  CreateProjectInput,
+  CreateReplicationRuleInput,
+  CreateTokenInput,
+  CreateUserInput,
   LifecyclePolicy,
+  LifecyclePolicyInput,
+  LoginInput,
   ManifestDetail,
+  MemberGrant,
   NotificationDelivery,
   NotificationPolicySummary,
   ProblemDetails,
+  ProjectAccessToken,
   ProjectDetail,
+  ProjectMember,
+  ProjectSettings,
   ProjectSummary,
+  QueuedReplication,
   RegistryStats,
   ReplicationExecution,
   ReplicationRuleSummary,
   RepositoryDetail,
   RepositorySummary,
   SessionUser,
+  SetMemberInput,
   TagSummary,
+  UpdateUserInput,
   UsageStats,
   UserSummary,
 } from "@registry/api-contract";
@@ -380,10 +398,8 @@ export const CreateReplicationRuleBody = v.object({
   remotePassword: v.optional(v.string("must be a string")),
 });
 
-/** The parsed shapes, for the handlers that pass a body on to a helper. */
-export type CreateTokenInput = v.InferOutput<typeof CreateTokenBody>;
-export type CleanupPolicyInputBody = v.InferOutput<typeof CleanupPolicyBody>;
-export type CreateReplicationRuleInput = v.InferOutput<typeof CreateReplicationRuleBody>;
+/** The parsed body a handler passes on to a helper, defaults already applied. */
+export type ParsedCreateToken = v.InferOutput<typeof CreateTokenBody>;
 
 /* -------------------------------------------------------------------------- */
 /* Responses                                                                   */
@@ -669,7 +685,9 @@ export const QueuedReplicationSchema = v.object({ queued: v.boolean(), rule: v.s
 export const MemberGrantSchema = v.object({
   project: v.string(),
   userId: v.string(),
-  username: v.optional(v.string()),
+  // Present on a fresh grant, absent when only a role changed - never explicitly
+  // undefined, so `exactOptional` keeps the contract type free of `| undefined`.
+  username: v.exactOptional(v.string()),
   role,
 });
 
@@ -682,14 +700,46 @@ export const listOf = <const Key extends string, Item extends v.GenericSchema>(k
 /* -------------------------------------------------------------------------- */
 
 /**
- * Each response schema must still describe the type the dashboard imports.
+ * A response schema must still describe the type the dashboard imports.
  *
- * Erased at build time, and checked at compile time: `Assert` only accepts
- * `true`, so a field renamed in `@registry/api-contract` and not here stops the
- * Worker compiling rather than quietly vanishing from the OpenAPI document.
+ * One-directional by design: the schema's output must be assignable to the
+ * contract, so the server can never return a shape the dashboard cannot read.
+ * The contract may be wider (it is what the client trusts). Erased at build
+ * time, checked at compile time: `Assert` only accepts `true`, so a field
+ * renamed in `@registry/api-contract` and not here stops the Worker compiling
+ * rather than quietly vanishing from the OpenAPI document.
  */
 type Describes<Schema extends v.GenericSchema, Contract> =
   v.InferOutput<Schema> extends Contract ? true : false;
+
+/**
+ * A request schema and its contract input type must describe each other exactly.
+ *
+ * Bidirectional, unlike responses: both the Worker (which parses) and the web
+ * app (which builds the body) author requests, so a drift in either direction -
+ * a field added to the schema but not the contract, or the reverse - must fail
+ * to compile. Checked against `InferInput`, the shape a caller may send, so a
+ * field with a default is optional here just as it is on the wire.
+ */
+/**
+ * Readonly-normalises arrays before comparison. A contract array is `readonly`
+ * by convention while valibot infers a mutable one, but the distinction is
+ * meaningless on the JSON wire, so it must not read as drift. A field renamed,
+ * added, dropped, or retyped still differs after normalisation and is caught.
+ */
+type Normalize<T> = T extends readonly (infer E)[]
+  ? readonly Normalize<E>[]
+  : T extends object
+    ? { readonly [K in keyof T]: Normalize<T[K]> }
+    : T;
+
+type Matches<Schema extends v.GenericSchema, Contract> = [Normalize<v.InferInput<Schema>>] extends [
+  Normalize<Contract>,
+]
+  ? [Normalize<Contract>] extends [Normalize<v.InferInput<Schema>>]
+    ? true
+    : false
+  : false;
 
 type Assert<Check extends true> = Check;
 
@@ -700,11 +750,13 @@ export type ContractChecks = [
   Assert<Describes<typeof RegistryStatsSchema, RegistryStats>>,
   Assert<Describes<typeof ProjectSummarySchema, ProjectSummary>>,
   Assert<Describes<typeof ProjectDetailSchema, ProjectDetail>>,
+  Assert<Describes<typeof ProjectMemberSchema, ProjectMember>>,
   Assert<Describes<typeof RepositorySummarySchema, RepositorySummary>>,
   Assert<Describes<typeof RepositoryDetailSchema, RepositoryDetail>>,
   Assert<Describes<typeof TagSummarySchema, TagSummary>>,
   Assert<Describes<typeof ManifestDetailSchema, ManifestDetail>>,
   Assert<Describes<typeof AccessTokenSummarySchema, AccessTokenSummary>>,
+  Assert<Describes<typeof ProjectAccessTokenSchema, ProjectAccessToken>>,
   Assert<Describes<typeof CreatedAccessTokenSchema, CreatedAccessToken>>,
   Assert<Describes<typeof UserSummarySchema, UserSummary>>,
   Assert<Describes<typeof LifecyclePolicySchema, LifecyclePolicy>>,
@@ -712,8 +764,27 @@ export type ContractChecks = [
   Assert<Describes<typeof AuditPageSchema, AuditPage>>,
   Assert<Describes<typeof UsageStatsSchema, UsageStats>>,
   Assert<Describes<typeof CleanupPolicySchema, CleanupPolicy>>,
+  Assert<Describes<typeof CleanupEventSchema, CleanupEvent>>,
   Assert<Describes<typeof NotificationPolicySchema, NotificationPolicySummary>>,
+  Assert<Describes<typeof CreatedNotificationPolicySchema, CreatedNotificationPolicy>>,
   Assert<Describes<typeof NotificationDeliverySchema, NotificationDelivery>>,
   Assert<Describes<typeof ReplicationRuleSchema, ReplicationRuleSummary>>,
   Assert<Describes<typeof ReplicationExecutionSchema, ReplicationExecution>>,
+  Assert<Describes<typeof QueuedReplicationSchema, QueuedReplication>>,
+  Assert<Describes<typeof MemberGrantSchema, MemberGrant>>,
+];
+
+export type RequestChecks = [
+  Assert<Matches<typeof LoginBody, LoginInput>>,
+  Assert<Matches<typeof CreateUserBody, CreateUserInput>>,
+  Assert<Matches<typeof UpdateUserBody, UpdateUserInput>>,
+  Assert<Matches<typeof CreateTokenBody, CreateTokenInput>>,
+  Assert<Matches<typeof CreateProjectBody, CreateProjectInput>>,
+  Assert<Matches<typeof UpdateProjectBody, ProjectSettings>>,
+  Assert<Matches<typeof AddMemberBody, AddMemberInput>>,
+  Assert<Matches<typeof SetMemberBody, SetMemberInput>>,
+  Assert<Matches<typeof LifecyclePolicyBody, LifecyclePolicyInput>>,
+  Assert<Matches<typeof CleanupPolicyBody, CleanupPolicyInput>>,
+  Assert<Matches<typeof CreateNotificationBody, CreateNotificationInput>>,
+  Assert<Matches<typeof CreateReplicationRuleBody, CreateReplicationRuleInput>>,
 ];

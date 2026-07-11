@@ -410,3 +410,138 @@ export interface ReplicationExecution {
   readonly error: string | null;
   readonly createdAt: number;
 }
+
+/** The acknowledgement that a rule was queued to run, and which rule it was. */
+export interface QueuedReplication {
+  readonly queued: boolean;
+  readonly rule: string;
+}
+
+/**
+ * A notification policy as it comes back from creation, with its signing secret.
+ *
+ * The secret signs a webhook's payload and is shown exactly here, once. A
+ * webhook with none gets one minted; an email target has no secret at all.
+ */
+export interface CreatedNotificationPolicy extends NotificationPolicySummary {
+  readonly secret: string | null;
+}
+
+/**
+ * The membership a grant established. `username` accompanies a fresh grant and
+ * is absent when only an existing member's role changed.
+ */
+export interface MemberGrant {
+  readonly project: string;
+  readonly userId: string;
+  readonly username?: string;
+  readonly role: Role;
+}
+
+/** One retirement in a project's cleanup history. */
+export interface CleanupEvent {
+  readonly repository: string | null;
+  readonly action: string;
+  readonly subject: string;
+  readonly reason: string;
+  readonly createdAt: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Request inputs                                                             */
+/*                                                                            */
+/* Hand-written, never inferred from the valibot schemas (ADR-0001: the       */
+/* contract stays runtime-free). Each is pinned to its schema by a            */
+/* bidirectional guard in apps/registry/src/api/schemas.ts, so either side    */
+/* drifting fails to compile. A field the caller may omit is optional; a      */
+/* field it may send absent or as null carries `| null | undefined`, matching */
+/* the schema's nullish default. Arrays are mutable because that is what the  */
+/* schema accepts and the guard is exact.                                     */
+/* -------------------------------------------------------------------------- */
+
+export interface LoginInput {
+  readonly username: string;
+  readonly password: string;
+}
+
+export interface CreateUserInput {
+  readonly username: string;
+  readonly password: string;
+  readonly email: string;
+  readonly isAdmin?: boolean | null | undefined;
+}
+
+export interface UpdateUserInput {
+  readonly email: string;
+}
+
+export interface ScopeInput {
+  readonly repository: string;
+  readonly actions: readonly Action[];
+}
+
+export interface CreateTokenInput {
+  readonly name: string;
+  readonly scopes: readonly ScopeInput[];
+  readonly project?: string | null | undefined;
+  readonly expiresInDays?: number | null | undefined;
+}
+
+export interface CreateProjectInput {
+  readonly name: string;
+  readonly visibility?: Visibility | null | undefined;
+  readonly description?: string | null | undefined;
+  readonly quotaBytes?: number | null | undefined;
+}
+
+export interface AddMemberInput {
+  readonly username: string;
+  readonly role: Role;
+}
+
+export interface SetMemberInput {
+  readonly role: Role;
+}
+
+export interface LifecyclePolicyInput {
+  readonly enabled?: boolean | null | undefined;
+  readonly keepLastTags?: number | null | undefined;
+  readonly untaggedTtlDays?: number | null | undefined;
+}
+
+export interface CleanupRuleInput {
+  readonly repositories: string;
+  readonly tags?: TagCriteria | null | undefined;
+  readonly keepLast?: number | null | undefined;
+  readonly keepWithinDays?: number | null | undefined;
+  readonly keepBy?: "updated" | "semver";
+}
+
+export interface CleanupPolicyInput {
+  readonly enabled: boolean;
+  readonly schedule: string;
+  readonly rules: readonly CleanupRuleInput[];
+  readonly untaggedOlderThanDays?: number | null | undefined;
+}
+
+export interface CreateNotificationInput {
+  readonly name: string;
+  readonly targetType: NotificationTargetType;
+  readonly target: string;
+  readonly secret?: string | null | undefined;
+  readonly eventTypes: readonly NotificationEventType[];
+}
+
+export interface CreateReplicationRuleInput {
+  readonly name: string;
+  readonly direction: ReplicationDirection;
+  readonly remoteUrl: string;
+  readonly trigger?: ReplicationTrigger | null | undefined;
+  readonly schedule?: string | null | undefined;
+  readonly sourceRepositories?: readonly string[] | null | undefined;
+  readonly repositoryFilter?: string | null | undefined;
+  readonly destinationNamespace?: string | null | undefined;
+  readonly tagFilter?: TagCriteria | null | undefined;
+  readonly remoteUsername?: string | undefined;
+  readonly remotePassword?: string | undefined;
+}

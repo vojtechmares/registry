@@ -417,6 +417,8 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
 function NotificationsCard({ name }: { name: string }) {
   const queryClient = useQueryClient();
   const [url, setUrl] = useState("");
+  // Left blank, the registry mints a secret and shows it once on success.
+  const [secret, setSecret] = useState("");
 
   const { data: policies } = useQuery({
     queryKey: ["notifications", name],
@@ -438,6 +440,7 @@ function NotificationsCard({ name }: { name: string }) {
         name: "webhook",
         targetType: "webhook",
         target: url,
+        secret,
         eventTypes: ["PUSH_ARTIFACT", "DELETE_ARTIFACT"],
       }),
     onSuccess: (result) => {
@@ -445,6 +448,7 @@ function NotificationsCard({ name }: { name: string }) {
         duration: 12_000,
       });
       setUrl("");
+      setSecret("");
       invalidate();
     },
     onError: (error) => toast.error(message(error, "Could not add the webhook")),
@@ -486,6 +490,16 @@ function NotificationsCard({ name }: { name: string }) {
               value={url}
               onChange={(event) => setUrl(event.target.value)}
               required
+            />
+          </div>
+          <div className="flex-1 space-y-2">
+            <Label htmlFor="hook-secret">Signing secret</Label>
+            <Input
+              id="hook-secret"
+              type="text"
+              placeholder="Leave blank to generate one"
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
             />
           </div>
           <Button type="submit" disabled={create.isPending || url === ""}>

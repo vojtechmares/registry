@@ -17,7 +17,7 @@ import {
   ProjectParam,
   ProjectTargetParam,
   listOf,
-  type CreateTokenInput,
+  type ParsedCreateToken,
 } from "../schemas.js";
 import { jsonBody, validate } from "../validate.js";
 import { projectOwner } from "./project-access.js";
@@ -43,7 +43,7 @@ async function assertAllowed(c: ApiContext, repository: string, action: Action):
  * `acme/api` could also delete `payments/vault`. The pin is checked again on
  * every request, and a scope may never carry the token out of it.
  */
-async function mintToken(c: ApiContext, pinned: string | null, body: CreateTokenInput): Promise<Response> {
+async function mintToken(c: ApiContext, pinned: string | null, body: ParsedCreateToken): Promise<Response> {
   const principal = principalOf(c);
   // A machine token must not manage tokens at all, let alone mint a wider one.
   const identity = requireUser(principal);
