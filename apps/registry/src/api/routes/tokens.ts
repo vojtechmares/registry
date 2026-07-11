@@ -85,15 +85,15 @@ async function mintToken(c: ApiContext, pinned: string | null, body: ParsedCreat
     authorized.push({ repository: scope.repository, actions: scope.actions });
   }
 
-  const { admin, audit } = storesOf(c);
-  if (identity.id === "bootstrap") await admin.ensureBootstrapUser(identity.username);
+  const { users, tokens: tokenStore, audit } = storesOf(c);
+  if (identity.id === "bootstrap") await users.ensureBootstrapUser(identity.username);
 
   const id = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
   const secret = generateTokenSecret();
   const days = body.expiresInDays ?? null;
   const expiresAt = days === null ? null : Date.now() + days * DAY_MS;
 
-  const summary = await admin.createToken({
+  const summary = await tokenStore.createToken({
     id,
     name: body.name,
     userId: identity.id,
@@ -132,7 +132,7 @@ tokens.get(
   humanOnly,
   async (c) => {
     const identity = requireUser(principalOf(c));
-    return c.json({ tokens: await storesOf(c).admin.listTokens(identity.id) });
+    return c.json({ tokens: await storesOf(c).tokens.listTokens(identity.id) });
   },
 );
 
@@ -172,8 +172,8 @@ tokens.delete(
     const identity = requireUser(principal);
     const { id } = c.req.valid("param");
 
-    const { admin, audit } = storesOf(c);
-    if (!(await admin.revokeToken(identity.id, id))) throw notFound();
+    const { tokens: tokenStore, audit } = storesOf(c);
+    if (!(await tokenStore.revokeToken(identity.id, id))) throw notFound();
 
     await audit.record({
       actor: actorOf(principal),
@@ -208,7 +208,7 @@ tokens.get(
   }),
   projectOwner,
   validate("param", ProjectParam),
-  async (c) => c.json({ tokens: await storesOf(c).admin.listProjectTokens(c.req.valid("param").project) }),
+  async (c) => c.json({ tokens: await storesOf(c).tokens.listProjectTokens(c.req.valid("param").project) }),
 );
 
 tokens.post(
@@ -247,8 +247,8 @@ tokens.delete(
     const principal = principalOf(c);
     const { project, id } = c.req.valid("param");
 
-    const { admin, audit } = storesOf(c);
-    if (!(await admin.revokeProjectToken(project, id))) throw notFound();
+    const { tokens: tokenStore, audit } = storesOf(c);
+    if (!(await tokenStore.revokeProjectToken(project, id))) throw notFound();
 
     await audit.record({
       actor: actorOf(principal),

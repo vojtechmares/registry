@@ -1,19 +1,16 @@
 import type {
-  AccessTokenSummary,
-  ProjectAccessToken,
   LifecyclePolicy,
   ManifestDetail,
   RegistryStats,
   RepositoryDetail,
   RepositorySummary,
   TagSummary,
-  UserSummary,
   Visibility,
 } from "@registry/api-contract";
 import { projectOf } from "@registry/projects";
-import { parseScopes, type Scope } from "../auth/scopes.js";
 import { type Audience, visibleProjectsFilter } from "../visibility.js";
-import { flag, flagValue, jsonObject, toUserSummary, type UserRow } from "./codec.js";
+import { REPOSITORY_CONTENT_TABLES, deleteRepositoryContent, recomputeUsage } from "./cascade.js";
+import { flag, flagValue, jsonObject } from "./codec.js";
 
 /**
  * Escapes a literal for use inside a `LIKE` pattern, paired with `ESCAPE '\'`.
@@ -28,8 +25,8 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
-/** Read and write paths for the dashboard, kept apart from the hot registry path. */
-export class AdminStore {
+/** Repository reads, deletion, the `_catalog` listing, and registry-wide stats. */
+export class RepositoryStore {
   constructor(private readonly db: D1Database) {}
 
   /**
@@ -279,28 +276,13 @@ export class AdminStore {
   async deleteRepository(repository: string): Promise<boolean> {
     const project = projectOf(repository);
     const results = await this.db.batch([
-      this.db.prepare("DELETE FROM tags WHERE repository = ?").bind(repository),
-      this.db.prepare("DELETE FROM manifest_blobs WHERE repository = ?").bind(repository),
-      this.db.prepare("DELETE FROM manifest_children WHERE repository = ?").bind(repository),
-      this.db.prepare("DELETE FROM manifests WHERE repository = ?").bind(repository),
-      this.db.prepare("DELETE FROM repository_blobs WHERE repository = ?").bind(repository),
-      this.db.prepare("DELETE FROM lifecycle_policies WHERE repository = ?").bind(repository),
+      ...deleteRepositoryContent(this.db, repository),
       this.db.prepare("DELETE FROM repositories WHERE name = ?").bind(repository),
       // In the same transaction as the unlinks, so the total can never be read
       // between the two and believed.
-      this.db
-        .prepare(
-          `UPDATE projects
-              SET used_bytes = COALESCE((
-                    SELECT SUM(b.size)
-                    FROM (SELECT DISTINCT digest FROM repository_blobs WHERE project = ?1) AS d
-                    JOIN blobs AS b ON b.digest = d.digest
-                  ), 0)
-            WHERE name = ?1`,
-        )
-        .bind(project),
+      recomputeUsage(this.db, project),
     ]);
-    return (results[6]?.meta.changes ?? 0) > 0;
+    return (results[REPOSITORY_CONTENT_TABLES.length]?.meta.changes ?? 0) > 0;
   }
 
   async policy(repository: string): Promise<LifecyclePolicy | null> {
@@ -342,291 +324,6 @@ export class AdminStore {
         policy.untaggedTtlDays,
         Date.now(),
       )
-      .run();
-  }
-
-  async listTokens(userId: string): Promise<AccessTokenSummary[]> {
-    const rows = await this.db
-      .prepare(
-        `SELECT id, name, scopes, project, expires_at, revoked, created_at, last_used_at
-         FROM access_tokens WHERE user_id = ? ORDER BY created_at DESC`,
-      )
-      .bind(userId)
-      .all<{
-        id: string;
-        name: string;
-        scopes: string;
-        project: string | null;
-        expires_at: number | null;
-        revoked: number;
-        created_at: number;
-        last_used_at: number | null;
-      }>();
-
-    return rows.results.map((row) => ({
-      id: row.id,
-      name: row.name,
-      scopes: parseScopes(row.scopes),
-      project: row.project,
-      expiresAt: row.expires_at,
-      createdAt: row.created_at,
-      lastUsedAt: row.last_used_at,
-      revoked: flag(row.revoked),
-    }));
-  }
-
-  async createToken(input: {
-    id: string;
-    name: string;
-    userId: string;
-    secretHash: string;
-    scopes: readonly Scope[];
-    project: string | null;
-    expiresAt: number | null;
-  }): Promise<AccessTokenSummary> {
-    const createdAt = Date.now();
-    await this.db
-      .prepare(
-        `INSERT INTO access_tokens
-           (id, name, user_id, secret_hash, scopes, project, expires_at, revoked, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-      )
-      .bind(
-        input.id,
-        input.name,
-        input.userId,
-        input.secretHash,
-        JSON.stringify(input.scopes),
-        input.project,
-        input.expiresAt,
-        createdAt,
-      )
-      .run();
-
-    return {
-      id: input.id,
-      name: input.name,
-      scopes: input.scopes,
-      project: input.project,
-      expiresAt: input.expiresAt,
-      createdAt,
-      lastUsedAt: null,
-      revoked: false,
-    };
-  }
-
-  async revokeToken(userId: string, tokenId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM access_tokens WHERE id = ? AND user_id = ?")
-      .bind(tokenId, userId)
-      .run();
-    return (result.meta.changes ?? 0) > 0;
-  }
-
-  /** Every token pinned to the project, whoever minted it. For its owners. */
-  async listProjectTokens(project: string): Promise<ProjectAccessToken[]> {
-    const rows = await this.db
-      .prepare(
-        `SELECT t.id, t.name, t.scopes, t.project, t.expires_at, t.revoked, t.created_at, t.last_used_at,
-                u.username
-         FROM access_tokens AS t
-         JOIN users AS u ON u.id = t.user_id
-         WHERE t.project = ?
-         ORDER BY t.created_at DESC`,
-      )
-      .bind(project)
-      .all<{
-        id: string;
-        name: string;
-        scopes: string;
-        project: string;
-        expires_at: number | null;
-        revoked: number;
-        created_at: number;
-        last_used_at: number | null;
-        username: string;
-      }>();
-
-    return rows.results.map((row) => ({
-      id: row.id,
-      name: row.name,
-      username: row.username,
-      scopes: parseScopes(row.scopes),
-      project: row.project,
-      expiresAt: row.expires_at,
-      createdAt: row.created_at,
-      lastUsedAt: row.last_used_at,
-      revoked: flag(row.revoked),
-    }));
-  }
-
-  /**
-   * Revokes a token by project rather than by owner, for an owner cleaning up
-   * after a member who has left. The `project` predicate is what stops it from
-   * being a way to revoke any token in the registry by guessing its id.
-   */
-  async revokeProjectToken(project: string, tokenId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM access_tokens WHERE id = ? AND project = ?")
-      .bind(tokenId, project)
-      .run();
-    return (result.meta.changes ?? 0) > 0;
-  }
-
-  async listUsers(): Promise<UserSummary[]> {
-    const rows = await this.db
-      .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users ORDER BY username")
-      .all<UserRow>();
-
-    return rows.results.map(toUserSummary);
-  }
-
-  /** The id of the account holding this address, or null. Addresses are stored lowercase. */
-  async findUserIdByEmail(email: string): Promise<string | null> {
-    const row = await this.db
-      .prepare("SELECT id FROM users WHERE email = ?")
-      .bind(email)
-      .first<{ id: string }>();
-    return row?.id ?? null;
-  }
-
-  /** Sets or clears a user's address. Null when the user does not exist. */
-  async setUserEmail(id: string, email: string | null): Promise<UserSummary | null> {
-    const result = await this.db
-      .prepare("UPDATE users SET email = ?, updated_at = ? WHERE id = ?")
-      .bind(email, Date.now(), id)
-      .run();
-    if ((result.meta.changes ?? 0) === 0) return null;
-
-    return this.db
-      .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE id = ?")
-      .bind(id)
-      .first<UserRow>()
-      .then((row) => (row === null ? null : toUserSummary(row)));
-  }
-
-  async createUser(input: {
-    id: string;
-    username: string;
-    email: string | null;
-    passwordHash: string;
-    isAdmin: boolean;
-  }): Promise<UserSummary> {
-    const now = Date.now();
-    await this.db
-      .prepare(
-        `INSERT INTO users (id, username, email, password_hash, is_admin, disabled, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-      )
-      .bind(input.id, input.username, input.email, input.passwordHash, flagValue(input.isAdmin), now, now)
-      .run();
-
-    return {
-      id: input.id,
-      username: input.username,
-      email: input.email,
-      isAdmin: input.isAdmin,
-      disabled: false,
-      createdAt: now,
-    };
-  }
-
-  async deleteUser(id: string): Promise<boolean> {
-    const result = await this.db.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
-    return (result.meta.changes ?? 0) > 0;
-  }
-
-  /**
-   * Finds or creates the local account behind a federated identity.
-   *
-   * Keyed on (issuer, subject): a subject is unique only within its issuer, and
-   * keying on the subject alone would let a second provider claim an account by
-   * minting a token for the same subject string.
-   *
-   * A federated account has no password. `password_hash` holds a marker that no
-   * PBKDF2 verification can match, so the account cannot also be reached by
-   * guessing a password it does not have.
-   */
-  async findOrCreateOidcUser(input: {
-    issuer: string;
-    subject: string;
-    username: string;
-    email: string | null;
-    isAdmin: boolean;
-  }): Promise<UserSummary & { disabled: boolean }> {
-    const existing = await this.db
-      .prepare(
-        "SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
-      )
-      .bind(input.issuer, input.subject)
-      .first<UserRow>();
-
-    if (existing !== null) {
-      // The provider is the authority on group membership, so administrator
-      // status is re-read on every sign-in rather than frozen at creation.
-      if (flag(existing.is_admin) !== input.isAdmin) {
-        await this.db
-          .prepare("UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?")
-          .bind(flagValue(input.isAdmin), Date.now(), existing.id)
-          .run();
-      }
-      return { ...toUserSummary(existing), isAdmin: input.isAdmin };
-    }
-
-    const now = Date.now();
-    const id = crypto.randomUUID();
-    const username = await this.availableUsername(input.username);
-
-    // An address already held by another account is dropped rather than allowed
-    // to fail the sign-in. Accounts are linked by (issuer, subject), never by
-    // email, so the address is informational and its loss costs the new account
-    // nothing an administrator cannot restore. Refusing to sign the user in
-    // because a stranger claimed their address would cost rather more.
-    const email = input.email === null ? null : await this.emailIfFree(input.email);
-
-    await this.db
-      .prepare(
-        `INSERT INTO users
-           (id, username, email, password_hash, is_admin, disabled, created_at, updated_at, oidc_issuer, oidc_subject)
-         VALUES (?, ?, ?, 'external:oidc', ?, 0, ?, ?, ?, ?)`,
-      )
-      .bind(id, username, email, flagValue(input.isAdmin), now, now, input.issuer, input.subject)
-      .run();
-
-    return { id, username, email, isAdmin: input.isAdmin, disabled: false, createdAt: now };
-  }
-
-  private async emailIfFree(email: string): Promise<string | null> {
-    return (await this.findUserIdByEmail(email)) === null ? email : null;
-  }
-
-  /** `alice`, then `alice-2`, and so on. A username is a namespace, and two people cannot share one. */
-  private async availableUsername(preferred: string): Promise<string> {
-    for (let suffix = 0; suffix < 50; suffix++) {
-      const candidate = suffix === 0 ? preferred : `${preferred}-${suffix + 1}`;
-      const taken = await this.db.prepare("SELECT 1 FROM users WHERE username = ?").bind(candidate).first();
-      if (taken === null) return candidate;
-    }
-    return `user-${crypto.randomUUID().slice(0, 8)}`;
-  }
-
-  /**
-   * Materialises the bootstrap administrator as a real row.
-   *
-   * The bootstrap admin authenticates against a secret, not the database, so it
-   * has no `users` row - and access tokens carry a foreign key to one. Creating
-   * the row on first use lets the operator issue tokens without first inventing
-   * a second account.
-   */
-  async ensureBootstrapUser(username: string): Promise<void> {
-    const now = Date.now();
-    await this.db
-      .prepare(
-        `INSERT INTO users (id, username, email, password_hash, is_admin, disabled, created_at, updated_at)
-         VALUES ('bootstrap', ?, NULL, 'external:bootstrap', 1, 0, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET username = excluded.username, updated_at = excluded.updated_at`,
-      )
-      .bind(username, now, now)
       .run();
   }
 

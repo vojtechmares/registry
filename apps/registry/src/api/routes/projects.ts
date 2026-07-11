@@ -202,7 +202,7 @@ projects.get(
 
     // The audience carries the pin: a token pinned to a different project selects
     // no rows for this one, so the confinement needs no separate short-circuit.
-    const repositories = await storesOf(c).admin.listRepositories({
+    const repositories = await storesOf(c).repositories.listRepositories({
       search: null,
       limit: 500,
       project,

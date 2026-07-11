@@ -21,7 +21,7 @@ const TAGS = ["Users"];
  * losing the race gives a 500 rather than a 409, and no duplicate.
  */
 async function requireFreeEmail(c: ApiContext, email: string, owner: string | null): Promise<string> {
-  const holder = await storesOf(c).admin.findUserIdByEmail(email);
+  const holder = await storesOf(c).users.findUserIdByEmail(email);
   if (holder !== null && holder !== owner) throw conflict(`"${email}" is already in use`);
   return email;
 }
@@ -35,7 +35,7 @@ users.get(
     refusals: { 403: "Administrator privileges are required." },
   }),
   adminOnly,
-  async (c) => c.json({ users: await storesOf(c).admin.listUsers() }),
+  async (c) => c.json({ users: await storesOf(c).users.listUsers() }),
 );
 
 users.post(
@@ -56,14 +56,14 @@ users.post(
   async (c) => {
     const principal = principalOf(c);
     const body = c.req.valid("json");
-    const { auth, admin, audit } = storesOf(c);
+    const { auth, users: userStore, audit } = storesOf(c);
 
     const email = await requireFreeEmail(c, body.email, null);
     if ((await auth.findUserByUsername(body.username)) !== null) {
       throw conflict(`user "${body.username}" already exists`);
     }
 
-    const user = await admin.createUser({
+    const user = await userStore.createUser({
       id: crypto.randomUUID(),
       username: body.username,
       email,
@@ -112,10 +112,10 @@ users.patch(
     const principal = principalOf(c);
     const { id } = c.req.valid("param");
 
-    const { admin, audit } = storesOf(c);
+    const { users: userStore, audit } = storesOf(c);
     const email = await requireFreeEmail(c, c.req.valid("json").email, id);
 
-    const user = await admin.setUserEmail(id, email);
+    const user = await userStore.setUserEmail(id, email);
     if (user === null) throw notFound(`user "${id}" does not exist`);
 
     await audit.record({
@@ -152,12 +152,12 @@ users.delete(
     if (identity.id === id) throw badRequest("you cannot delete your own account");
     if (id === "bootstrap") throw badRequest("the bootstrap administrator cannot be deleted");
 
-    const { auth, admin, audit } = storesOf(c);
+    const { auth, users: userStore, audit } = storesOf(c);
 
     // Read before the delete, so the row can name whom it was. There is no
     // foreign key from `audit_events` to `users`, precisely so this survives.
     const doomed = await auth.findUserById(id);
-    if (!(await admin.deleteUser(id))) throw notFound();
+    if (!(await userStore.deleteUser(id))) throw notFound();
 
     await audit.record({
       actor: actorOf(principal),

@@ -19,7 +19,7 @@ insights.get(
     refusals: { 403: "Administrator privileges are required." },
   }),
   adminOnly,
-  async (c) => c.json(await storesOf(c).admin.stats()),
+  async (c) => c.json(await storesOf(c).repositories.stats()),
 );
 
 /**
