@@ -81,6 +81,25 @@ describe("parseManifest", () => {
     expect(index.kind).toBe("index");
   });
 
+  it("accepts a valid image index unchanged", () => {
+    const index = parseManifest(
+      encode({
+        schemaVersion: 2,
+        mediaType: MEDIA_TYPE_OCI_INDEX,
+        manifests: [
+          { mediaType: MEDIA_TYPE_OCI_MANIFEST, digest: digestA, size: 10 },
+          { mediaType: MEDIA_TYPE_OCI_MANIFEST, digest: digestB, size: 20 },
+        ],
+        annotations: { "org.opencontainers.image.ref.name": "v1" },
+      }),
+    );
+    expect(index.kind === "index" && index.manifests.map((entry) => entry.digest)).toEqual([
+      digestA,
+      digestB,
+    ]);
+    expect(index.annotations).toEqual({ "org.opencontainers.image.ref.name": "v1" });
+  });
+
   it("reads subject and annotations", () => {
     const manifest = parseManifest(
       encode({
@@ -115,6 +134,15 @@ describe("parseManifest", () => {
       ],
       ["layers not an array", encode({ ...imageManifest, layers: {} })],
       ["non-string annotation", encode({ ...imageManifest, annotations: { key: 5 } })],
+      // A descriptor whose media type is missing is a content/media-type mismatch.
+      ["descriptor missing mediaType", encode({ schemaVersion: 2, config: { digest: digestA, size: 1 } })],
+      [
+        "index child with a bad digest",
+        encode({
+          schemaVersion: 2,
+          manifests: [{ mediaType: MEDIA_TYPE_OCI_MANIFEST, digest: "nope", size: 1 }],
+        }),
+      ],
     ];
 
     for (const [label, body] of cases) {
