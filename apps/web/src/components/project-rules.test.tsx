@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   CleanupPolicy,
@@ -8,8 +8,12 @@ import type {
   ReplicationExecution,
   ReplicationRuleSummary,
 } from "@registry/api-contract";
+import { ApiError } from "@/lib/api";
 import { ProjectRules } from "./project-rules";
 import { renderWithProviders } from "@/test/render";
+
+/** A validation refusal, named so `problemNameOf` and the field mapping both see it. */
+const INVALID_REQUEST = "https://registry.mareshq.com/problems/invalid-request";
 
 const mocks = vi.hoisted(() => ({
   cleanupPolicy: vi.fn(),
@@ -375,6 +379,28 @@ describe("the notifications card", () => {
     expect(await screen.findByText("ci-hook")).toBeInTheDocument();
     expect(screen.queryByText("Recent deliveries")).not.toBeInTheDocument();
   });
+
+  // The endpoint rides in the body as `target`, so a `/target` fault has to land
+  // under the endpoint field rather than as a bare toast.
+  it("renders a server field error at the endpoint field when the create is refused", async () => {
+    mocks.createNotification.mockRejectedValue(
+      new ApiError(400, INVALID_REQUEST, "Invalid request", "The request was refused.", [
+        { detail: "Enter an https endpoint.", pointer: "/target" },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    const endpoint = await screen.findByLabelText("Endpoint");
+    await user.type(endpoint, "https://hooks.example/x");
+    await user.click(
+      within(endpoint.closest("form") as HTMLFormElement).getByRole("button", { name: "Add" }),
+    );
+
+    const alert = await screen.findByText("Enter an https endpoint.");
+    expect(alert).toBeInTheDocument();
+    expect(alert).toHaveAttribute("role", "alert");
+  });
 });
 
 describe("the replication card", () => {
@@ -424,5 +450,23 @@ describe("the replication card", () => {
     expect(screen.getByText("1 manifest, 4 blobs")).toBeInTheDocument();
     // As with deliveries: the rule's name, resolved from the execution's rule id.
     expect(screen.getAllByText("downstream")).toHaveLength(2);
+  });
+
+  // The downstream URL rides in the body as `remoteUrl`, so a `/remoteUrl` fault
+  // has to land under the downstream field.
+  it("renders a server field error at the downstream field when the create is refused", async () => {
+    mocks.createReplicationRule.mockRejectedValue(
+      new ApiError(400, INVALID_REQUEST, "Invalid request", "The request was refused.", [
+        { detail: "Enter a reachable registry URL.", pointer: "/remoteUrl" },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    const remote = await screen.findByLabelText("Downstream registry");
+    await user.type(remote, "https://mirror.example/x");
+    await user.click(within(remote.closest("form") as HTMLFormElement).getByRole("button", { name: "Add" }));
+
+    expect(await screen.findByText("Enter a reachable registry URL.")).toBeInTheDocument();
   });
 });

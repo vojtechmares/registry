@@ -12,7 +12,8 @@ import { Label } from "@registry/ui/components/label";
 import { Skeleton } from "@registry/ui/components/skeleton";
 import { toast } from "@registry/ui/components/sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { presentError } from "@/lib/errors";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
 import { sessionStore } from "@/store/session";
@@ -36,7 +37,7 @@ function CreateProject() {
       invalidate.projects(queryClient);
     },
     onError: (error) => {
-      toast.error(error instanceof ApiError ? error.message : "Could not create the project");
+      toast.error(presentError(error, "Could not create the project"));
     },
   });
 

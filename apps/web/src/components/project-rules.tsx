@@ -28,12 +28,9 @@ import { Skeleton } from "@registry/ui/components/skeleton";
 import { Switch } from "@registry/ui/components/switch";
 import { toast } from "@registry/ui/components/sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { fieldErrorsOf, presentError } from "@/lib/errors";
 import { formatRelativeTime } from "@/lib/format";
-
-function message(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -206,7 +203,7 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
       toast.success(saved.enabled ? "Cleanup schedule saved" : "Cleanup disabled");
       invalidate.cleanup(queryClient, name);
     },
-    onError: (error) => toast.error(message(error, "Could not save")),
+    onError: (error) => toast.error(presentError(error, "Could not save")),
   });
 
   const tagsOf = (): TagsRule["tags"] => {
@@ -484,7 +481,7 @@ function NotificationsCard({ name }: { name: string }) {
       setSecret("");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not add the webhook")),
+    onError: (error) => toast.error(presentError(error, "Could not add the webhook")),
   });
 
   const remove = useMutation({
@@ -493,8 +490,12 @@ function NotificationsCard({ name }: { name: string }) {
       toast.success("Webhook removed");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not remove the webhook")),
+    onError: (error) => toast.error(presentError(error, "Could not remove the webhook")),
   });
+
+  // The URL rides in the body as `target` and the secret as `secret`, so a
+  // rejected create names those keys and each message lands under its field.
+  const fieldErrors = fieldErrorsOf(create.error);
 
   const named = (id: string): string => policies?.find((policy) => policy.id === id)?.name ?? id.slice(0, 8);
 
@@ -522,8 +523,14 @@ function NotificationsCard({ name }: { name: string }) {
               placeholder="https://example.com/hook"
               value={url}
               onChange={(event) => setUrl(event.target.value)}
+              aria-invalid={fieldErrors.get("target") !== undefined}
               required
             />
+            {fieldErrors.get("target") !== undefined && (
+              <p role="alert" className="text-sm text-destructive">
+                {fieldErrors.get("target")}
+              </p>
+            )}
           </div>
           <div className="flex-1 space-y-2">
             <Label htmlFor="hook-secret">Signing secret</Label>
@@ -533,7 +540,13 @@ function NotificationsCard({ name }: { name: string }) {
               placeholder="Leave blank to generate one"
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
+              aria-invalid={fieldErrors.get("secret") !== undefined}
             />
+            {fieldErrors.get("secret") !== undefined && (
+              <p role="alert" className="text-sm text-destructive">
+                {fieldErrors.get("secret")}
+              </p>
+            )}
           </div>
           <Button type="submit" disabled={create.isPending || url === ""}>
             Add
@@ -633,7 +646,7 @@ function ReplicationCard({ name }: { name: string }) {
       setRemote("");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not create the rule")),
+    onError: (error) => toast.error(presentError(error, "Could not create the rule")),
   });
 
   const remove = useMutation({
@@ -642,7 +655,7 @@ function ReplicationCard({ name }: { name: string }) {
       toast.success("Replication rule removed");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not remove the rule")),
+    onError: (error) => toast.error(presentError(error, "Could not remove the rule")),
   });
 
   const run = useMutation({
@@ -652,8 +665,12 @@ function ReplicationCard({ name }: { name: string }) {
       toast.success("Queued. The run will appear in the history once it finishes.");
       invalidate.executions(queryClient, name);
     },
-    onError: (error) => toast.error(message(error, "Could not run the rule")),
+    onError: (error) => toast.error(presentError(error, "Could not run the rule")),
   });
+
+  // The downstream URL rides in the body as `remoteUrl`, so a rejected create
+  // names that key and its message lands under the field.
+  const fieldErrors = fieldErrorsOf(create.error);
 
   const named = (id: string): string => rules?.find((rule) => rule.id === id)?.name ?? id.slice(0, 8);
 
@@ -681,8 +698,14 @@ function ReplicationCard({ name }: { name: string }) {
               placeholder="https://registry.example.com"
               value={remote}
               onChange={(event) => setRemote(event.target.value)}
+              aria-invalid={fieldErrors.get("remoteUrl") !== undefined}
               required
             />
+            {fieldErrors.get("remoteUrl") !== undefined && (
+              <p role="alert" className="text-sm text-destructive">
+                {fieldErrors.get("remoteUrl")}
+              </p>
+            )}
           </div>
           <Button type="submit" disabled={create.isPending || remote === ""}>
             Add

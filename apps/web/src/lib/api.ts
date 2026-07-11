@@ -19,6 +19,7 @@ import type {
   NotificationDelivery,
   NotificationPolicySummary,
   ProblemDetails,
+  ProblemFieldError,
   ProjectAccessToken,
   ProjectDetail,
   ProjectSettings,
@@ -51,19 +52,32 @@ import type {
  *
  * `message` is the problem's `detail`: the sentence about this one occurrence,
  * and the only part meant for a person. `type` is the stable identifier to
- * branch on, though the status usually says enough.
+ * branch on, though the status usually says enough. `fieldErrors` carries the
+ * per-field faults a validation refusal names, so a form can render each one
+ * where it belongs; `code` is the distribution-spec error code, when there is one.
  */
 export class ApiError extends Error {
   readonly status: number;
   readonly type: string;
   readonly title: string;
+  readonly fieldErrors: readonly ProblemFieldError[];
+  readonly code: string | null;
 
-  constructor(status: number, type: string, title: string, detail: string) {
+  constructor(
+    status: number,
+    type: string,
+    title: string,
+    detail: string,
+    fieldErrors: readonly ProblemFieldError[] = [],
+    code: string | null = null,
+  ) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.type = type;
     this.title = title;
+    this.fieldErrors = fieldErrors;
+    this.code = code;
   }
 
   get isUnauthenticated(): boolean {
@@ -90,12 +104,34 @@ function problemOf(text: string): Partial<ProblemDetails> {
   }
   if (parsed === null || typeof parsed !== "object") return {};
 
-  const { type, title, detail } = parsed as Record<string, unknown>;
+  const { type, title, detail, errors, code } = parsed as Record<string, unknown>;
   return {
     ...(typeof type === "string" ? { type } : {}),
     ...(typeof title === "string" ? { title } : {}),
     ...(typeof detail === "string" ? { detail } : {}),
+    ...(typeof code === "string" ? { code } : {}),
+    ...(Array.isArray(errors) ? { errors: parseFieldErrors(errors) } : {}),
   };
+}
+
+/**
+ * The per-field faults, kept only where each is shaped like one: a `detail`
+ * sentence, and a `pointer` or `parameter` when the server said which field.
+ * Anything else in the array is dropped rather than trusted.
+ */
+function parseFieldErrors(entries: readonly unknown[]): readonly ProblemFieldError[] {
+  const errors: ProblemFieldError[] = [];
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object") continue;
+    const { detail, pointer, parameter } = entry as Record<string, unknown>;
+    if (typeof detail !== "string") continue;
+    errors.push({
+      detail,
+      ...(typeof pointer === "string" ? { pointer } : {}),
+      ...(typeof parameter === "string" ? { parameter } : {}),
+    });
+  }
+  return errors;
 }
 
 function errorOf(response: Response, text: string): ApiError {
@@ -108,6 +144,8 @@ function errorOf(response: Response, text: string): ApiError {
     problem.type ?? "about:blank",
     problem.title ?? fallback,
     problem.detail ?? fallback,
+    problem.errors ?? [],
+    problem.code ?? null,
   );
 }
 

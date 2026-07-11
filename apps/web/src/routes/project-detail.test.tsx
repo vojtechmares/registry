@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ProjectDetail } from "@registry/api-contract";
+import { ApiError } from "@/lib/api";
 import { setSessionUser } from "@/store/session";
 import { ProjectPage } from "./project-detail";
 import { renderWithProviders } from "@/test/render";
 
-const mocks = vi.hoisted(() => ({ project: vi.fn(), projectStats: vi.fn() }));
+const mocks = vi.hoisted(() => ({ project: vi.fn(), projectStats: vi.fn(), updateProject: vi.fn() }));
+
+const INVALID_REQUEST = "https://registry.mareshq.com/problems/invalid-request";
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
@@ -47,5 +51,25 @@ describe("ProjectPage", () => {
     mocks.project.mockRejectedValue(new Error("boom"));
     renderWithProviders(<ProjectPage name="acme" />);
     expect(await screen.findByText("Could not load acme.")).toBeInTheDocument();
+  });
+
+  // An owner reaches the settings, and a rejected save that names `/quotaBytes`
+  // has to land under the quota field, not only in a toast.
+  it("renders a server field error at the quota field when the save is refused", async () => {
+    setSessionUser({ id: "u1", username: "root", isAdmin: true });
+    mocks.updateProject.mockRejectedValue(
+      new ApiError(400, INVALID_REQUEST, "Invalid request", "The request was refused.", [
+        { detail: "Quota must be a whole number of GiB.", pointer: "/quotaBytes" },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectPage name="acme" />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    const quota = await screen.findByLabelText("Quota (GiB)");
+    await user.type(quota, "5");
+    await user.click(within(quota.closest("form") as HTMLFormElement).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Quota must be a whole number of GiB.")).toBeInTheDocument();
   });
 });

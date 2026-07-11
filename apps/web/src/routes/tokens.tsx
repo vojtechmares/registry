@@ -6,7 +6,8 @@ import { Button } from "@registry/ui/components/button";
 import { Skeleton } from "@registry/ui/components/skeleton";
 import { toast } from "@registry/ui/components/sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { presentError } from "@/lib/errors";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
 import { sessionReady, sessionStore } from "@/store/session";
@@ -33,7 +34,7 @@ export function Tokens() {
       toast.success("Token revoked");
       invalidate.accountTokens(queryClient);
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not revoke the token"),
+    onError: (error) => toast.error(presentError(error, "Could not revoke the token")),
   });
 
   return (
