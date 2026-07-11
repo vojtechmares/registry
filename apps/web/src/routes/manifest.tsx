@@ -1,5 +1,6 @@
 import { Link, createRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { keys } from "@/lib/queries";
 import { FileTextIcon, ShieldCheckIcon } from "lucide-react";
 import { Badge } from "@workspace/ui/components/badge";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -25,7 +26,7 @@ function Manifest() {
   const { repo, digest } = manifestRoute.useSearch();
 
   const { data, isPending, error } = useQuery({
-    queryKey: ["manifest", repo, digest],
+    queryKey: keys.manifest(repo, digest),
     queryFn: () => api.manifest(repo, digest),
   });
 

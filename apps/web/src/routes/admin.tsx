@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import type { UserSummary } from "@registry/api-contract";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
@@ -48,8 +49,8 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 function Overview() {
-  const { data, isPending } = useQuery({ queryKey: ["stats"], queryFn: api.stats });
-  const repositories = useQuery({ queryKey: ["repositories", ""], queryFn: () => api.repositories() });
+  const { data, isPending } = useQuery({ queryKey: keys.stats(), queryFn: api.stats });
+  const repositories = useQuery({ queryKey: keys.repositories(""), queryFn: () => api.repositories() });
 
   if (isPending || data === undefined) return <Skeleton className="h-40 w-full" />;
 
@@ -101,7 +102,7 @@ function ChangeEmail({ user }: { user: UserSummary }) {
     onSuccess: () => {
       toast.success(`Updated ${user.username}`);
       setOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      invalidate.users(queryClient);
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save the email"),
   });
@@ -156,7 +157,7 @@ function ChangeEmail({ user }: { user: UserSummary }) {
 
 function Users() {
   const queryClient = useQueryClient();
-  const { data, isPending } = useQuery({ queryKey: ["users"], queryFn: api.users });
+  const { data, isPending } = useQuery({ queryKey: keys.users(), queryFn: api.users });
 
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -172,7 +173,7 @@ function Users() {
       setEmail("");
       setPassword("");
       setMakeAdmin(false);
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      invalidate.users(queryClient);
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not create the user"),
   });
@@ -181,7 +182,7 @@ function Users() {
     mutationFn: (id: string) => api.deleteUser(id),
     onSuccess: () => {
       toast.success("User deleted");
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      invalidate.users(queryClient);
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not delete the user"),
   });

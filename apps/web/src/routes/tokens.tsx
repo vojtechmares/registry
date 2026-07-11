@@ -1,5 +1,6 @@
 import { Link, createRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -26,13 +27,13 @@ import { sessionReady, sessionStore } from "@/store/session";
  */
 function Tokens() {
   const queryClient = useQueryClient();
-  const { data, isPending } = useQuery({ queryKey: ["tokens"], queryFn: api.tokens });
+  const { data, isPending } = useQuery({ queryKey: keys.tokens(), queryFn: api.tokens });
 
   const revoke = useMutation({
     mutationFn: (id: string) => api.revokeToken(id),
     onSuccess: () => {
       toast.success("Token revoked");
-      void queryClient.invalidateQueries({ queryKey: ["tokens"] });
+      invalidate.accountTokens(queryClient);
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not revoke the token"),
   });

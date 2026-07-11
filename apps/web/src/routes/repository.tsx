@@ -1,5 +1,6 @@
 import { Link, createRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import { useStore } from "@tanstack/react-store";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
@@ -27,7 +28,7 @@ function Repository() {
   const { user } = useStore(sessionStore);
 
   const { data, isPending, error } = useQuery({
-    queryKey: ["repository", name],
+    queryKey: keys.repository(name),
     queryFn: () => api.repository(name),
   });
 
@@ -124,7 +125,7 @@ function DeleteRepository({ name }: { name: string }) {
     mutationFn: () => api.deleteRepository(name),
     onSuccess: () => {
       toast.success(`Deleted ${name}`);
-      void queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      invalidate.repositories(queryClient);
       window.location.assign("/");
     },
     onError: () => toast.error("Could not delete the repository"),
