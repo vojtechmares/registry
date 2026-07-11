@@ -43,8 +43,6 @@ export interface MetadataStore {
   repositoryExists(repository: string): Promise<boolean>;
   ensureRepository(repository: string): Promise<void>;
 
-  /** Looks a blob up globally, ignoring which repositories link to it. */
-  getBlob(digest: string): Promise<BlobRecord | null>;
   /**
    * Repositories that link a blob, for authorising an automatic cross-mount.
    * Bounded by `limit`, since only one readable source is needed.

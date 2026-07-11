@@ -93,10 +93,6 @@ export class MemoryMetadataStore implements MetadataStore {
     this.repositories.add(repository);
   }
 
-  async getBlob(digest: string): Promise<BlobRecord | null> {
-    return this.blobs.get(digest) ?? null;
-  }
-
   async repositoriesLinkingBlob(digest: string, limit: number): Promise<string[]> {
     const linking: string[] = [];
     for (const [repository, digests] of this.blobLinks) {

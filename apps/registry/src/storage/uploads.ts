@@ -70,7 +70,7 @@ export class DurableObjectUploadStore implements UploadStore {
     if (!UPLOAD_SESSION_ID.test(id)) throw blobUploadUnknown();
   }
 
-  private call(
+  private async call(
     id: string,
     path: string,
     parameters: Record<string, string>,
@@ -80,10 +80,23 @@ export class DurableObjectUploadStore implements UploadStore {
     const url = new URL(path, ORIGIN);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
 
-    return stub.fetch(url.toString(), {
-      method: "POST",
-      ...(body === undefined || body === null ? {} : { body: body as unknown as BodyInit }),
-    });
+    try {
+      const response = await stub.fetch(url.toString(), {
+        method: "POST",
+        ...(body === undefined || body === null ? {} : { body: body as unknown as BodyInit }),
+      });
+      // Buffer the small status document so the stub can be released now rather
+      // than outliving the request; the layer being uploaded travels the other
+      // way, in the request body, and is never buffered here. A 204 carries no
+      // body, and the Response constructor forbids giving it one.
+      const empty = response.status === 204 || response.status === 304;
+      const buffer = empty ? null : await response.arrayBuffer();
+      return new Response(buffer, { status: response.status, headers: response.headers });
+    } finally {
+      // The stub is a JSRPC resource. Release it deterministically where the
+      // runtime supports disposal, so it does not outlive the request.
+      (stub as Partial<Disposable>)[Symbol.dispose]?.();
+    }
   }
 }
 

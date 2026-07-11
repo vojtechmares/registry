@@ -6,7 +6,9 @@
     "moduleResolution": "Bundler",
     // ES2023 for the non-mutating array methods (`toSorted`), which both
     // workerd and every browser the dashboard targets have shipped.
-    "lib": ["ES2023"],
+    // ESNext.Disposable adds `using` and `Symbol.dispose`, so a JSRPC stub
+    // (a Durable Object stub) can be released deterministically.
+    "lib": ["ES2023", "ESNext.Disposable"],
     "types": [],
 
     "strict": true,
