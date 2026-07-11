@@ -8,15 +8,12 @@ import { Input } from "@registry/ui/components/input";
 import { Label } from "@registry/ui/components/label";
 import { toast } from "@registry/ui/components/sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { presentError } from "@/lib/errors";
 
 const ROLES: Role[] = ["guest", "developer", "maintainer", "owner"];
 
 const ROLE_CLASS = "rounded-md border bg-background px-2 py-1 text-sm";
-
-function message(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
 
 /**
  * The members of one project: who may do what, and the form that adds them.
@@ -39,20 +36,20 @@ export function ProjectMembers({ project }: { project: ProjectDetail }) {
       setUsername("");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not add the member")),
+    onError: (error) => toast.error(presentError(error, "Could not add the member")),
   });
 
   const setRoleOf = useMutation({
     mutationFn: ({ userId, next }: { userId: string; next: Role }) =>
       api.setMember(project.name, userId, next),
     onSuccess: refresh,
-    onError: (error) => toast.error(message(error, "Could not update the member")),
+    onError: (error) => toast.error(presentError(error, "Could not update the member")),
   });
 
   const remove = useMutation({
     mutationFn: (userId: string) => api.removeMember(project.name, userId),
     onSuccess: refresh,
-    onError: (error) => toast.error(message(error, "Could not remove the member")),
+    onError: (error) => toast.error(presentError(error, "Could not remove the member")),
   });
 
   return (

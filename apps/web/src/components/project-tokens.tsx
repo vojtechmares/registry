@@ -12,14 +12,11 @@ import { Skeleton } from "@registry/ui/components/skeleton";
 import { toast } from "@registry/ui/components/sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { CopyButton } from "@/components/copy-button";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { presentError } from "@/lib/errors";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 
 const ACTIONS = ["pull", "push", "delete"] as const;
-
-function message(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
 
 /**
  * A project's machine credentials.
@@ -51,7 +48,7 @@ export function ProjectTokens({ project }: { project: string }) {
       setRepository("*");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not create the token")),
+    onError: (error) => toast.error(presentError(error, "Could not create the token")),
   });
 
   const revoke = useMutation({
@@ -60,7 +57,7 @@ export function ProjectTokens({ project }: { project: string }) {
       toast.success("Token revoked");
       refresh();
     },
-    onError: (error) => toast.error(message(error, "Could not revoke the token")),
+    onError: (error) => toast.error(presentError(error, "Could not revoke the token")),
   });
 
   return (

@@ -6,7 +6,8 @@ import { Button } from "@registry/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@registry/ui/components/card";
 import { Input } from "@registry/ui/components/input";
 import { Label } from "@registry/ui/components/label";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { problemNameOf } from "@/lib/errors";
 import { rootRoute } from "@/routes/root";
 import { setSessionUser } from "@/store/session";
 
@@ -28,12 +29,15 @@ export function Login() {
     },
   });
 
+  // The problem type tells the two refusals apart: a wrong password is
+  // `unauthorized`, a locked-out one `rate-limited`. The status would too, but
+  // the type is the identifier the server means for us to branch on.
   const message =
     signIn.error === null
       ? null
-      : signIn.error instanceof ApiError && signIn.error.status === 401
+      : problemNameOf(signIn.error) === "unauthorized"
         ? "Incorrect username or password."
-        : signIn.error instanceof ApiError && signIn.error.status === 429
+        : problemNameOf(signIn.error) === "rate-limited"
           ? "Too many attempts. Try again shortly."
           : "Something went wrong. Try again.";
 

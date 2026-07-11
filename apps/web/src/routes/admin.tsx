@@ -24,7 +24,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@registry/ui/component
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { AuditLog } from "@/components/audit-log";
 import { RepositoryTable } from "@/components/repository-table";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { presentError } from "@/lib/errors";
 import { formatBytes, formatDate } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
 import { isAdmin, sessionReady, sessionStore } from "@/store/session";
@@ -97,7 +98,7 @@ function ChangeEmail({ user }: { user: UserSummary }) {
       setOpen(false);
       invalidate.users(queryClient);
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save the email"),
+    onError: (error) => toast.error(presentError(error, "Could not save the email")),
   });
 
   return (
@@ -168,7 +169,7 @@ function Users() {
       setMakeAdmin(false);
       invalidate.users(queryClient);
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not create the user"),
+    onError: (error) => toast.error(presentError(error, "Could not create the user")),
   });
 
   const remove = useMutation({
@@ -177,7 +178,7 @@ function Users() {
       toast.success("User deleted");
       invalidate.users(queryClient);
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not delete the user"),
+    onError: (error) => toast.error(presentError(error, "Could not delete the user")),
   });
 
   return (

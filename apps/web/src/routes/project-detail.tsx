@@ -16,7 +16,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ProjectMembers } from "@/components/project-members";
 import { ProjectRules } from "@/components/project-rules";
 import { ProjectTokens } from "@/components/project-tokens";
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import { fieldErrorsOf, presentError } from "@/lib/errors";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";
 import { VisibilityBadge } from "@/routes/projects";
@@ -41,8 +42,12 @@ function Settings({ project }: { project: ProjectDetail }) {
       toast.success("Saved");
       invalidate.project(queryClient, project.name);
     },
-    onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save"),
+    onError: (error) => toast.error(presentError(error, "Could not save")),
   });
+
+  // One mutation serves every control here, so a refusal names the field it
+  // meant - `quotaBytes`, `description` - and only that field shows its message.
+  const fieldErrors = fieldErrorsOf(update.error);
 
   return (
     <div className="space-y-6">
@@ -91,7 +96,13 @@ function Settings({ project }: { project: ProjectDetail }) {
                 placeholder="unlimited"
                 value={quotaGiB}
                 onChange={(event) => setQuotaGiB(event.target.value)}
+                aria-invalid={fieldErrors.get("quotaBytes") !== undefined}
               />
+              {fieldErrors.get("quotaBytes") !== undefined && (
+                <p role="alert" className="text-sm text-destructive">
+                  {fieldErrors.get("quotaBytes")}
+                </p>
+              )}
             </div>
             <Button type="submit" disabled={update.isPending}>
               Save
@@ -165,12 +176,19 @@ function Settings({ project }: { project: ProjectDetail }) {
               update.mutate({ description: description === "" ? null : description });
             }}
           >
-            <Input
-              className="flex-1"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder="What this project holds"
-            />
+            <div className="flex-1 space-y-2">
+              <Input
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="What this project holds"
+                aria-invalid={fieldErrors.get("description") !== undefined}
+              />
+              {fieldErrors.get("description") !== undefined && (
+                <p role="alert" className="text-sm text-destructive">
+                  {fieldErrors.get("description")}
+                </p>
+              )}
+            </div>
             <Button type="submit" variant="outline" disabled={update.isPending}>
               Save
             </Button>
