@@ -253,8 +253,7 @@ function Usage({ name }: { name: string }) {
   );
 }
 
-function ProjectPage() {
-  const name = projectDetailRoute.useParams().name;
+export function ProjectPage({ name }: { name: string }) {
   const { user } = useStore(sessionStore);
   const { data, isPending, error } = useProject(name);
 
@@ -330,5 +329,7 @@ function ProjectPage() {
 export const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$name",
-  component: ProjectPage,
+  component: function ProjectDetailRoute() {
+    return <ProjectPage name={projectDetailRoute.useParams().name} />;
+  },
 });

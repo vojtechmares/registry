@@ -22,9 +22,7 @@ function referrerIcon(artifactType: string | null) {
   return <FileTextIcon className="size-4" />;
 }
 
-function Manifest() {
-  const { repo, digest } = manifestRoute.useSearch();
-
+export function Manifest({ repo, digest }: ManifestSearch) {
   const { data, isPending, error } = useQuery({
     queryKey: keys.manifest(repo, digest),
     queryFn: () => api.manifest(repo, digest),
@@ -141,5 +139,8 @@ export const manifestRoute = createRoute({
     repo: String(search.repo ?? ""),
     digest: String(search.digest ?? ""),
   }),
-  component: Manifest,
+  component: function ManifestRoute() {
+    const { repo, digest } = manifestRoute.useSearch();
+    return <Manifest repo={repo} digest={digest} />;
+  },
 });

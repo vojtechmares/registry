@@ -280,7 +280,12 @@ function Users() {
   );
 }
 
-function Admin() {
+/** The redirect decision the route guard makes: a non-administrator goes to the sign-in page. */
+export function requireAdmin(): void {
+  if (!isAdmin(sessionStore.state)) throw redirect({ to: "/login" });
+}
+
+export function Admin() {
   return (
     <div className="space-y-6">
       <div>
@@ -320,7 +325,7 @@ export const adminRoute = createRoute({
    */
   beforeLoad: async () => {
     await sessionReady;
-    if (!isAdmin(sessionStore.state)) throw redirect({ to: "/login" });
+    requireAdmin();
   },
   component: Admin,
 });

@@ -18,7 +18,7 @@ const LOGO = [
   "╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝   ╚═╝   ",
 ].join("\n");
 
-function Browse() {
+export function Browse() {
   const [search, setSearch] = useState("");
   const { data, isPending, error } = useQuery({
     queryKey: keys.repositories(search),
