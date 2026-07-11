@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CreatedAccessToken } from "@registry/api-contract";
+import type { Action, CreatedAccessToken } from "@registry/api-contract";
 import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
@@ -40,7 +40,7 @@ export function ProjectTokens({ project }: { project: string }) {
 
   const [name, setName] = useState("");
   const [repository, setRepository] = useState("*");
-  const [actions, setActions] = useState<string[]>(["pull"]);
+  const [actions, setActions] = useState<Action[]>(["pull"]);
 
   const { data, isPending } = useQuery({
     queryKey: ["project-tokens", project],

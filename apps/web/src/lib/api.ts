@@ -4,9 +4,18 @@ import type {
   AuditResourceType,
   AuthProviders,
   CleanupPolicy,
+  CleanupPolicyInput,
   CreatedAccessToken,
+  CreatedNotificationPolicy,
+  CreateNotificationInput,
+  CreateProjectInput,
+  CreateReplicationRuleInput,
+  CreateTokenInput,
+  CreateUserInput,
   LifecyclePolicy,
+  LifecyclePolicyInput,
   ManifestDetail,
+  MemberGrant,
   NotificationDelivery,
   NotificationPolicySummary,
   ProblemDetails,
@@ -14,6 +23,7 @@ import type {
   ProjectDetail,
   ProjectSettings,
   ProjectSummary,
+  QueuedReplication,
   RegistryStats,
   ReplicationExecution,
   ReplicationRuleSummary,
@@ -22,9 +32,9 @@ import type {
   Role,
   SessionUser,
   TagSummary,
+  UpdateUserInput,
   UsageStats,
   UserSummary,
-  Visibility,
 } from "@registry/api-contract";
 
 /**
@@ -177,10 +187,10 @@ export const api = {
 
   policy: (name: string) => request<LifecyclePolicy>(`/repositories/${repoPath(name)}/policy`),
 
-  setPolicy: (policy: LifecyclePolicy) =>
-    request<LifecyclePolicy>(`/repositories/${repoPath(policy.repository)}/policy`, {
+  setPolicy: (repository: string, input: LifecyclePolicyInput) =>
+    request<LifecyclePolicy>(`/repositories/${repoPath(repository)}/policy`, {
       method: "PUT",
-      body: JSON.stringify(policy),
+      body: JSON.stringify(input),
     }),
 
   /** Every token the caller owns, across the projects they belong to. */
@@ -193,14 +203,7 @@ export const api = {
     ),
 
   /** A token always names a project; there is no registry-wide credential. */
-  createProjectToken: (
-    project: string,
-    input: {
-      name: string;
-      scopes: Array<{ repository: string; actions: string[] }>;
-      expiresInDays?: number;
-    },
-  ) =>
+  createProjectToken: (project: string, input: CreateTokenInput) =>
     request<CreatedAccessToken>(`/projects/${encodeURIComponent(project)}/tokens`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -215,11 +218,11 @@ export const api = {
 
   users: () => request<{ users: UserSummary[] }>("/users").then((r) => r.users),
 
-  createUser: (input: { username: string; password: string; email: string; isAdmin?: boolean }) =>
+  createUser: (input: CreateUserInput) =>
     request<UserSummary>("/users", { method: "POST", body: JSON.stringify(input) }),
 
   /** An administrator may change any address; anyone else may change only their own. */
-  updateUser: (id: string, input: { email: string }) =>
+  updateUser: (id: string, input: UpdateUserInput) =>
     request<UserSummary>(`/users/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input),
@@ -233,12 +236,8 @@ export const api = {
 
   project: (name: string) => request<ProjectDetail>(`/projects/${encodeURIComponent(name)}`),
 
-  createProject: (input: {
-    name: string;
-    visibility?: Visibility;
-    description?: string;
-    quotaBytes?: number | null;
-  }) => request<ProjectDetail>("/projects", { method: "POST", body: JSON.stringify(input) }),
+  createProject: (input: CreateProjectInput) =>
+    request<ProjectDetail>("/projects", { method: "POST", body: JSON.stringify(input) }),
 
   updateProject: (name: string, settings: ProjectSettings) =>
     request<ProjectDetail>(`/projects/${encodeURIComponent(name)}`, {
@@ -253,10 +252,10 @@ export const api = {
     request<UsageStats>(`/projects/${encodeURIComponent(name)}/stats?days=${days}`),
 
   setMember: (project: string, userId: string, role: Role) =>
-    request<{ project: string; userId: string; role: Role }>(
-      `/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`,
-      { method: "PUT", body: JSON.stringify({ role }) },
-    ),
+    request<MemberGrant>(`/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ role }),
+    }),
 
   /**
    * Adds a member by the name their owner knows them by.
@@ -266,10 +265,10 @@ export const api = {
    * itself rather than leaking its user list to every project owner.
    */
   addMember: (project: string, username: string, role: Role) =>
-    request<{ project: string; userId: string; username: string; role: Role }>(
-      `/projects/${encodeURIComponent(project)}/members`,
-      { method: "POST", body: JSON.stringify({ username, role }) },
-    ),
+    request<MemberGrant>(`/projects/${encodeURIComponent(project)}/members`, {
+      method: "POST",
+      body: JSON.stringify({ username, role }),
+    }),
 
   removeMember: (project: string, userId: string) =>
     request<void>(`/projects/${encodeURIComponent(project)}/members/${encodeURIComponent(userId)}`, {
@@ -279,10 +278,7 @@ export const api = {
   cleanupPolicy: (project: string) =>
     request<CleanupPolicy>(`/projects/${encodeURIComponent(project)}/cleanup`),
 
-  setCleanupPolicy: (
-    project: string,
-    policy: Omit<CleanupPolicy, "project" | "nextRunAt" | "lastRunAt" | "lastResult">,
-  ) =>
+  setCleanupPolicy: (project: string, policy: CleanupPolicyInput) =>
     request<CleanupPolicy>(`/projects/${encodeURIComponent(project)}/cleanup`, {
       method: "PUT",
       body: JSON.stringify(policy),
@@ -299,17 +295,11 @@ export const api = {
       `/projects/${encodeURIComponent(project)}/deliveries?limit=${limit}`,
     ).then((r) => r.deliveries),
 
-  createNotification: (
-    project: string,
-    input: { name: string; targetType: "webhook" | "email"; target: string; eventTypes: string[] },
-  ) =>
-    request<NotificationPolicySummary & { secret: string | null }>(
-      `/projects/${encodeURIComponent(project)}/notifications`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    ),
+  createNotification: (project: string, input: CreateNotificationInput) =>
+    request<CreatedNotificationPolicy>(`/projects/${encodeURIComponent(project)}/notifications`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   deleteNotification: (project: string, id: string) =>
     request<void>(`/projects/${encodeURIComponent(project)}/notifications/${encodeURIComponent(id)}`, {
@@ -327,14 +317,14 @@ export const api = {
       `/projects/${encodeURIComponent(project)}/executions?limit=${limit}`,
     ).then((r) => r.executions),
 
-  createReplicationRule: (project: string, input: Record<string, unknown>) =>
-    request<{ id: string }>(`/projects/${encodeURIComponent(project)}/replication`, {
+  createReplicationRule: (project: string, input: CreateReplicationRuleInput) =>
+    request<ReplicationRuleSummary>(`/projects/${encodeURIComponent(project)}/replication`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
 
   runReplicationRule: (project: string, id: string) =>
-    request<{ queued: boolean; rule: string }>(
+    request<QueuedReplication>(
       `/projects/${encodeURIComponent(project)}/replication/${encodeURIComponent(id)}`,
       { method: "POST", body: "{}" },
     ),
