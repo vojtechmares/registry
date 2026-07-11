@@ -1,4 +1,5 @@
 import { nextRun } from "@registry/cron";
+import { events } from "@registry/notifications";
 import {
   type CleanupRule,
   type ManifestState,
@@ -8,6 +9,7 @@ import {
   evaluateUntagged,
 } from "@registry/retention";
 import type { Env } from "../env.js";
+import { notify } from "../notifications/dispatch.js";
 import { ProjectPolicy } from "../policy.js";
 import { ProjectStore } from "../storage/projects.js";
 import { SignatureIndex } from "../storage/signatures.js";
@@ -130,7 +132,33 @@ async function runPolicy(env: Env, retirer: Retirer, policy: PolicyRow, now: num
     .bind(now, result, policy.project)
     .run();
 
+  await announceCleanup(env, policy.project, tagsRemoved, untaggedRemoved, now);
+
   return { project: policy.project, tagsRemoved, untaggedRemoved };
+}
+
+/**
+ * Tells the project's subscribed policies what one cleanup run removed.
+ *
+ * One event per run, not per deletion, and only when the run retired something:
+ * a run that touched nothing is not news. Best-effort, like every other
+ * notification - the retirements are already recorded, so a webhook that cannot
+ * be queued must not fail the run.
+ */
+async function announceCleanup(
+  env: Env,
+  project: string,
+  tagsRemoved: number,
+  untaggedRemoved: number,
+  now: number,
+): Promise<void> {
+  if (tagsRemoved + untaggedRemoved === 0) return;
+
+  try {
+    await notify(env, events.CLEANUP({ project, at: now, data: { tagsRemoved, untaggedRemoved } }));
+  } catch (error) {
+    console.error("failed to announce cleanup", { project, error });
+  }
 }
 
 async function cleanRepository(
