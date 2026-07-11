@@ -1,6 +1,5 @@
 import type { ProjectSettings } from "@registry/api-contract";
 import { Hono } from "hono";
-import { tokenProjectPin, viewerOf } from "../../auth/principal.js";
 import { principalOf, storesOf, type ApiEnv } from "../context.js";
 import { humanOnly, requireUser } from "../guard.js";
 import { describe } from "../openapi.js";
@@ -26,7 +25,8 @@ import {
   listOf,
 } from "../schemas.js";
 import { jsonBody, validate } from "../validate.js";
-import { auditProject, canView, isLastOwner, projectOwner } from "./project-access.js";
+import { audienceOf, isVisible } from "../../visibility.js";
+import { auditProject, isLastOwner, projectOwner } from "./project-access.js";
 
 export const projects = new Hono<ApiEnv>();
 
@@ -41,12 +41,8 @@ projects.get(
     public: true,
   }),
   async (c) => {
-    const principal = principalOf(c);
-    const all = await storesOf(c).projects.list(viewerOf(principal));
-
-    // A pinned token sees only its own project, whatever its owner can see.
-    const pin = tokenProjectPin(principal);
-    return c.json({ projects: pin === null ? all : all.filter((project) => project.name === pin) });
+    const visible = await storesOf(c).projects.list(audienceOf(principalOf(c)));
+    return c.json({ projects: visible });
   },
 );
 
@@ -117,7 +113,14 @@ projects.get(
 
     // A private project is invisible, not forbidden: answering 403 would confirm
     // the name exists to anyone who guessed it.
-    if (detail === null || !canView(principal, detail.visibility, detail.role, project)) {
+    if (
+      detail === null ||
+      !isVisible(audienceOf(principal), {
+        name: project,
+        visibility: detail.visibility,
+        role: detail.role,
+      })
+    ) {
       throw notFound(`project "${project}" does not exist`);
     }
 
@@ -197,17 +200,13 @@ projects.get(
     const principal = principalOf(c);
     const { project } = c.req.valid("param");
 
-    // A pinned token sees nothing outside its project, whatever its owner can
-    // see. Without this, a token scoped to one project could name another and
-    // read back every repository an administrator who owns it can see.
-    const pin = tokenProjectPin(principal);
-    if (pin !== null && pin !== project) return c.json({ repositories: [] });
-
+    // The audience carries the pin: a token pinned to a different project selects
+    // no rows for this one, so the confinement needs no separate short-circuit.
     const repositories = await storesOf(c).admin.listRepositories({
       search: null,
       limit: 500,
       project,
-      visibleTo: viewerOf(principal),
+      audience: audienceOf(principal),
     });
     return c.json({ repositories });
   },
@@ -238,7 +237,14 @@ projects.get(
 
     const viewerId = principal.kind === "anonymous" ? null : principal.identity.id;
     const detail = await storesOf(c).projects.get(project, viewerId);
-    if (detail === null || !canView(principal, detail.visibility, detail.role, project)) {
+    if (
+      detail === null ||
+      !isVisible(audienceOf(principal), {
+        name: project,
+        visibility: detail.visibility,
+        role: detail.role,
+      })
+    ) {
       throw notFound(`project "${project}" does not exist`);
     }
 

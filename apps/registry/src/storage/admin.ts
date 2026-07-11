@@ -12,6 +12,7 @@ import type {
 } from "@registry/api-contract";
 import { projectOf } from "@registry/projects";
 import { parseScopes, type Scope } from "../auth/scopes.js";
+import { type Audience, visibleProjectsFilter } from "../visibility.js";
 
 /**
  * Escapes a literal for use inside a `LIKE` pattern, paired with `ESCAPE '\'`.
@@ -33,34 +34,6 @@ function json<T>(raw: string | null): T | null {
   } catch {
     return null;
   }
-}
-
-export interface Viewer {
-  readonly id: string;
-  readonly username: string;
-  readonly isAdmin: boolean;
-}
-
-/**
- * Who may see a repository, expressed once and joined through its project.
- *
- * An administrator sees everything. Anyone else sees the public projects, the
- * projects they are a member of, and the project named after them. An anonymous
- * caller sees only what is public. Returns null when no filter is needed.
- *
- * A fragment rather than a repeated clause, because `_catalog` and the
- * dashboard's repository list must never drift apart: one of them disclosing a
- * private repository name the other hides is a leak in whichever is wrong.
- */
-function visibleProjects(viewer: Viewer | null, alias: string): { sql: string; bindings: unknown[] } | null {
-  if (viewer === null) return { sql: `${alias}.visibility = 'public'`, bindings: [] };
-  if (viewer.isAdmin) return null;
-  return {
-    sql: `(${alias}.visibility = 'public'
-           OR ${alias}.name = ?
-           OR EXISTS (SELECT 1 FROM project_members AS pm WHERE pm.project = ${alias}.name AND pm.user_id = ?))`,
-    bindings: [viewer.username, viewer.id],
-  };
 }
 
 /** Read and write paths for the dashboard, kept apart from the hot registry path. */
@@ -115,7 +88,7 @@ export class AdminStore {
     search: string | null;
     limit: number;
     project: string | null;
-    visibleTo: Viewer | null;
+    audience: Audience;
   }): Promise<RepositorySummary[]> {
     const filters: string[] = [];
     const bindings: unknown[] = [];
@@ -130,7 +103,7 @@ export class AdminStore {
       bindings.push(options.project);
     }
 
-    const visible = visibleProjects(options.visibleTo, "p");
+    const visible = visibleProjectsFilter(options.audience, "p");
     if (visible !== null) {
       filters.push(visible.sql);
       bindings.push(...visible.bindings);
@@ -721,8 +694,7 @@ export class AdminStore {
   async catalog(
     limit: number,
     last: string | null,
-    viewer: Viewer | null,
-    project: string | null = null,
+    audience: Audience,
   ): Promise<{ names: string[]; hasMore: boolean }> {
     const conditions: string[] = [];
     const bindings: unknown[] = [];
@@ -732,13 +704,9 @@ export class AdminStore {
       bindings.push(last);
     }
 
-    // A project-pinned token confines the whole catalog to its project.
-    if (project !== null) {
-      conditions.push("r.project = ?");
-      bindings.push(project);
-    }
-
-    const visible = visibleProjects(viewer, "p");
+    // The audience carries the pin, so a project-pinned token is confined to its
+    // project by the same filter that hides private names.
+    const visible = visibleProjectsFilter(audience, "p");
     if (visible !== null) {
       conditions.push(visible.sql);
       bindings.push(...visible.bindings);

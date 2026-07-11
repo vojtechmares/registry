@@ -2,7 +2,7 @@ import type { LifecyclePolicy } from "@registry/api-contract";
 import { projectOf } from "@registry/projects";
 import { Hono } from "hono";
 import { actorOf } from "../../audit/store.js";
-import { tokenProjectPin, viewerOf } from "../../auth/principal.js";
+import { audienceOf } from "../../visibility.js";
 import { authorizeFor, principalOf, storesOf, type ApiContext, type ApiEnv } from "../context.js";
 import { guard } from "../guard.js";
 import { describe } from "../openapi.js";
@@ -79,14 +79,13 @@ repositories.get(
     const principal = principalOf(c);
     const query = c.req.valid("query");
 
-    // A pinned token is confined to its project regardless of the query it sends.
-    const pin = tokenProjectPin(principal);
-
+    // The audience carries the pin, so a pinned token is confined to its project
+    // by the visibility filter itself - the route restates neither rule nor pin.
     const repositoryList = await storesOf(c).admin.listRepositories({
       search: query.search ?? null,
-      project: pin ?? query.project ?? null,
+      project: query.project ?? null,
       limit: query.limit,
-      visibleTo: viewerOf(principal),
+      audience: audienceOf(principal),
     });
     return c.json({ repositories: repositoryList });
   },

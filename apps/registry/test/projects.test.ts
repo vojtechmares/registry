@@ -389,6 +389,65 @@ describe("project-scoped tokens", () => {
   });
 });
 
+/** Only the visibility-matrix fixtures, so projects seeded elsewhere cannot skew it. */
+const matrixFixtures = (names: string[]): string[] =>
+  names.filter((name) => name === "alice" || name.startsWith("vm-")).sort();
+
+describe("listing visibility without a pin", () => {
+  beforeAll(async () => {
+    await seedRepository("vm-public/app", { name: "vm-public", visibility: "public" });
+    await seedRepository("vm-private/app", { name: "vm-private", visibility: "private" });
+    await seedRepository("vm-member/app", { name: "vm-member", visibility: "private" });
+    await seedMember("vm-member", ALICE.id, "developer");
+    // Alice's personal namespace: a private project named after her, with no
+    // membership row - the namesake branch, tested apart from membership.
+    await seedRepository("alice/app", { name: "alice", visibility: "private" });
+  });
+
+  async function visibleProjects(auth: string | null): Promise<string[]> {
+    const response = await call(
+      "GET",
+      "/api/v1/projects",
+      auth === null ? {} : { headers: { Authorization: auth } },
+    );
+    const { projects } = (await response.json()) as { projects: Array<{ name: string }> };
+    return matrixFixtures(projects.map((project) => project.name));
+  }
+
+  it("shows an anonymous caller only public projects", async () => {
+    expect(await visibleProjects(null)).toEqual(["vm-public"]);
+  });
+
+  it("shows a member their memberships and personal namespace on top of public projects", async () => {
+    expect(await visibleProjects(aliceAuth)).toEqual(["alice", "vm-member", "vm-public"]);
+  });
+
+  it("hides a private project from a caller who neither owns nor belongs to it", async () => {
+    expect(await visibleProjects(bobAuth)).toEqual(["vm-public"]);
+  });
+
+  it("shows an administrator every project", async () => {
+    expect(await visibleProjects(adminAuth)).toEqual(["alice", "vm-member", "vm-private", "vm-public"]);
+  });
+
+  it("applies the same rule to the catalog and the repository listing", async () => {
+    // The catalog an anonymous caller sees carries only the public repository.
+    const catalog = await call("GET", "/v2/_catalog");
+    const { repositories } = (await catalog.json()) as { repositories: string[] };
+    expect(repositories.filter((name) => name.startsWith("vm-") || name.startsWith("alice/"))).toEqual([
+      "vm-public/app",
+    ]);
+
+    // A member's repository listing includes their private membership and namespace.
+    const repos = await call("GET", "/api/v1/repositories", { headers: { Authorization: aliceAuth } });
+    const list = (await repos.json()) as { repositories: Array<{ name: string }> };
+    const names = list.repositories
+      .map((repository) => repository.name)
+      .filter((name) => name.startsWith("vm-") || name.startsWith("alice/"));
+    expect(names.toSorted()).toEqual(["alice/app", "vm-member/app", "vm-public/app"]);
+  });
+});
+
 /**
  * Adding a member by name.
  *
