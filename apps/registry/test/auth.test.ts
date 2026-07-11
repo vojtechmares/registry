@@ -132,4 +132,21 @@ describe("bearer tokens", () => {
     expect(response.status).toBe(401);
     expect(await errorCode(response)).toBe("UNAUTHORIZED");
   });
+
+  it("issues a token at /v2/token that the registry then accepts for a pull", async () => {
+    // The docker handshake end to end: exchange credentials for a bearer at the
+    // token endpoint, then present the bearer - the token this mints and the one
+    // the pull verifies are the same JWT, minted and checked by the same code.
+    const exchanged = await call("GET", `/v2/token?scope=repository:${REPO}:pull&service=registry`, {
+      headers: { Authorization: basic(USER, PASSWORD) },
+    });
+    expect(exchanged.status).toBe(200);
+    const { token } = (await exchanged.json()) as { token: string };
+
+    const pull = await call("GET", `/v2/${REPO}/tags/list`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(pull.status).toBe(200);
+    expect(await pull.json()).toEqual({ name: REPO, tags: ["v1"] });
+  });
 });

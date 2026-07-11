@@ -1,13 +1,16 @@
 /**
- * HS256 JSON Web Tokens, signed with Web Crypto's HMAC.
+ * HS256 JSON Web Tokens, signed and verified with `jose`.
  *
- * Written out rather than pulled in: the registry needs exactly one algorithm
- * and one claim set, and a JWT library's flexibility - `alg: none`, algorithm
- * confusion between HMAC and RSA - is the source of most JWT vulnerabilities.
- * Here the algorithm is fixed at both ends and never read from the token.
+ * A JWT library's danger is its flexibility - `alg: none`, HMAC/RSA confusion -
+ * so the algorithm is pinned to a single value at both ends. Verification passes
+ * `jose` an allowed-algorithms list of exactly `HS256`, and the library rejects
+ * any other `alg`, including `none`, before any crypto runs - the same invariant
+ * the registry needs, now on audited base64url/JSON parsing. The wire format is
+ * an ordinary HS256 JWT, unchanged from the hand-rolled predecessor, so tokens
+ * minted by either implementation are interchangeable.
  */
 
-import { timingSafeEqual } from "./password.js";
+import { SignJWT, jwtVerify } from "jose";
 
 export interface RegistryClaims {
   /** Subject: the user id. */
@@ -29,44 +32,25 @@ export interface RegistryClaims {
   readonly jti: string;
 }
 
-function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
+/** The one algorithm the registry mints and accepts. Pinned, never read from the token. */
+const ALGORITHM = "HS256";
 
-function base64UrlDecode(text: string): Uint8Array {
-  const padded = text
-    .replace(/-/g, "+")
-    .replace(/_/g, "/")
-    .padEnd(Math.ceil(text.length / 4) * 4, "=");
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
+/**
+ * Clock-skew grace on the validity window, matching the hand-rolled predecessor,
+ * which accepted a `nbf` up to a minute ahead so a verifier whose clock trails
+ * the issuer's does not reject a freshly minted token.
+ */
+const CLOCK_TOLERANCE_SECONDS = 60;
 
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
+function keyOf(secret: string): Uint8Array {
+  return new TextEncoder().encode(secret);
 }
 
 export async function signJwt(claims: RegistryClaims, secret: string): Promise<string> {
-  const header = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(claims)));
-  const signingInput = `${header}.${payload}`;
-
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    await hmacKey(secret),
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
+  // The claims already carry iss/aud/sub/exp/iat/nbf/jti (and any confinement),
+  // so they are the payload as-is; `jose` frames and signs them without a setter
+  // overriding anything.
+  return new SignJWT({ ...claims }).setProtectedHeader({ alg: ALGORITHM, typ: "JWT" }).sign(keyOf(secret));
 }
 
 /** Returns the claims only if the signature, algorithm, audience and validity window all hold. */
@@ -76,50 +60,23 @@ export async function verifyJwt(
   expected: { issuer: string; audience: string },
   now = Date.now(),
 ): Promise<RegistryClaims | null> {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [header, payload, signature] = parts as [string, string, string];
-
-  let decodedHeader: unknown;
   try {
-    decodedHeader = JSON.parse(new TextDecoder().decode(base64UrlDecode(header)));
+    const { payload } = await jwtVerify(token, keyOf(secret), {
+      // The allowed-algorithms list is the pin: `alg: none` and HMAC/RSA
+      // confusion are rejected here, before any signature is checked.
+      algorithms: [ALGORITHM],
+      issuer: expected.issuer,
+      audience: expected.audience,
+      clockTolerance: CLOCK_TOLERANCE_SECONDS,
+      currentDate: new Date(now),
+    });
+
+    // `jose` validates the registered claims and the algorithm; the registry's
+    // own claims - a string subject and an access array - it does not know about.
+    if (typeof payload.sub !== "string" || !Array.isArray(payload.access)) return null;
+
+    return payload as unknown as RegistryClaims;
   } catch {
     return null;
   }
-  // The algorithm is asserted, never trusted from the token. `alg: none` and
-  // HMAC/RSA confusion both die here.
-  if (
-    typeof decodedHeader !== "object" ||
-    decodedHeader === null ||
-    (decodedHeader as { alg?: unknown }).alg !== "HS256"
-  ) {
-    return null;
-  }
-
-  let actual: Uint8Array;
-  try {
-    actual = base64UrlDecode(signature);
-  } catch {
-    return null;
-  }
-
-  const expectedSignature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(`${header}.${payload}`)),
-  );
-  if (!timingSafeEqual(actual, expectedSignature)) return null;
-
-  let claims: RegistryClaims;
-  try {
-    claims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))) as RegistryClaims;
-  } catch {
-    return null;
-  }
-
-  const seconds = Math.floor(now / 1000);
-  if (typeof claims.exp !== "number" || claims.exp <= seconds) return null;
-  if (typeof claims.nbf === "number" && claims.nbf > seconds + 60) return null;
-  if (claims.iss !== expected.issuer || claims.aud !== expected.audience) return null;
-  if (typeof claims.sub !== "string" || !Array.isArray(claims.access)) return null;
-
-  return claims;
 }
