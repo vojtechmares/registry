@@ -65,6 +65,12 @@ describe("event constructors", () => {
     expect(event).toMatchObject({ type: "REPLICATION", repository: "acme/api" });
   });
 
+  it("builds a project-level replication event when a sweep names no repository", () => {
+    const event = events.REPLICATION({ project: "acme", at: AT, data: { status: "succeeded" } });
+    expect(event).toMatchObject({ type: "REPLICATION", project: "acme", data: { status: "succeeded" } });
+    expect(event.repository).toBeUndefined();
+  });
+
   it("builds a cleanup event against the project", () => {
     const event = events.CLEANUP({ project: "acme", at: AT, data: { tagsRemoved: 3 } });
     expect(event).toMatchObject({ type: "CLEANUP", project: "acme", data: { tagsRemoved: 3 } });

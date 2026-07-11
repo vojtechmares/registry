@@ -1,5 +1,5 @@
 import { isValidRepositoryName } from "@registry/oci";
-import { isPublicHttpsUrl } from "@registry/notifications";
+import { events, isPublicHttpsUrl } from "@registry/notifications";
 import { projectOf } from "@registry/projects";
 import {
   type RegistryClient,
@@ -17,6 +17,7 @@ import { D1MetadataStore } from "../storage/metadata.js";
 import { ProjectStore } from "../storage/projects.js";
 import { SignatureIndex } from "../storage/signatures.js";
 import { TagIndex } from "../storage/tags.js";
+import { notify } from "../notifications/dispatch.js";
 import { LocalRegistry } from "./local.js";
 import { ReplicationStore } from "./store.js";
 
@@ -52,9 +53,21 @@ async function remoteRegistry(store: ReplicationStore, rule: ReplicationRule) {
   });
 }
 
-interface Totals {
+/** What one run copied, and how it fared, so the run can announce itself. */
+interface RunOutcome {
   manifests: number;
   blobs: number;
+  copied: number;
+  failed: number;
+  firstError: string | null;
+}
+
+function outcome(): RunOutcome {
+  return { manifests: 0, blobs: 0, copied: 0, failed: 0, firstError: null };
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -72,7 +85,7 @@ async function copyOne(
   sourceRepository: string,
   destinationRepository: string,
   reference: string,
-  totals: Totals,
+  run: RunOutcome,
 ): Promise<void> {
   try {
     const report = await copyArtifact(
@@ -82,8 +95,9 @@ async function copyOne(
       destinationRepository,
       reference,
     );
-    totals.manifests += report.manifests;
-    totals.blobs += report.blobs;
+    run.manifests += report.manifests;
+    run.blobs += report.blobs;
+    run.copied++;
 
     await store.recordExecution({
       ruleId: rule.id,
@@ -96,6 +110,8 @@ async function copyOne(
       error: null,
     });
   } catch (error) {
+    run.failed++;
+    run.firstError ??= messageOf(error);
     await store.recordExecution({
       ruleId: rule.id,
       project: rule.project,
@@ -104,7 +120,7 @@ async function copyOne(
       reference,
       manifests: 0,
       blobs: 0,
-      error: error instanceof Error ? error.message : String(error),
+      error: messageOf(error),
     });
   }
 }
@@ -113,12 +129,12 @@ async function copyOne(
 async function runPush(env: Env, store: ReplicationStore, rule: ReplicationRule, payload: ReplicatePayload) {
   const local = localRegistry(env);
   const remote = await remoteRegistry(store, rule);
-  const totals: Totals = { manifests: 0, blobs: 0 };
+  const run = outcome();
 
   // One artifact, named by the push that triggered this.
   if (payload.repository !== undefined && payload.reference !== undefined) {
     if (!ruleMatchesRepository(rule, payload.repository) || !ruleMatchesTag(rule, payload.reference)) {
-      return totals;
+      return run;
     }
     await copyOne(
       store,
@@ -128,9 +144,9 @@ async function runPush(env: Env, store: ReplicationStore, rule: ReplicationRule,
       payload.repository,
       remap(payload.repository, rule.destinationNamespace),
       payload.reference,
-      totals,
+      run,
     );
-    return totals;
+    return run;
   }
 
   const repositories = await env.DB.prepare("SELECT name FROM repositories WHERE project = ?")
@@ -142,14 +158,14 @@ async function runPush(env: Env, store: ReplicationStore, rule: ReplicationRule,
     if (!ruleMatchesRepository(rule, name)) continue;
 
     for (const tag of await local.listTags(name)) {
-      if (copied >= MAX_ARTIFACTS_PER_RUN) return totals;
+      if (copied >= MAX_ARTIFACTS_PER_RUN) return run;
       if (!ruleMatchesTag(rule, tag)) continue;
 
-      await copyOne(store, rule, local, remote, name, remap(name, rule.destinationNamespace), tag, totals);
+      await copyOne(store, rule, local, remote, name, remap(name, rule.destinationNamespace), tag, run);
       copied++;
     }
   }
-  return totals;
+  return run;
 }
 
 /**
@@ -162,7 +178,7 @@ async function runPush(env: Env, store: ReplicationStore, rule: ReplicationRule,
 async function runPull(env: Env, store: ReplicationStore, rule: ReplicationRule) {
   const local = localRegistry(env);
   const remote = await remoteRegistry(store, rule);
-  const totals: Totals = { manifests: 0, blobs: 0 };
+  const run = outcome();
 
   let copied = 0;
   for (const sourceRepository of rule.sourceRepositories) {
@@ -173,6 +189,8 @@ async function runPull(env: Env, store: ReplicationStore, rule: ReplicationRule)
     try {
       tags = await remote.listTags(sourceRepository);
     } catch (error) {
+      run.failed++;
+      run.firstError ??= messageOf(error);
       await store.recordExecution({
         ruleId: rule.id,
         project: rule.project,
@@ -181,20 +199,20 @@ async function runPull(env: Env, store: ReplicationStore, rule: ReplicationRule)
         reference: null,
         manifests: 0,
         blobs: 0,
-        error: error instanceof Error ? error.message : String(error),
+        error: messageOf(error),
       });
       continue;
     }
 
     for (const tag of tags) {
-      if (copied >= MAX_ARTIFACTS_PER_RUN) return totals;
+      if (copied >= MAX_ARTIFACTS_PER_RUN) return run;
       if (!ruleMatchesTag(rule, tag)) continue;
 
-      await copyOne(store, rule, remote, local, sourceRepository, destination, tag, totals);
+      await copyOne(store, rule, remote, local, sourceRepository, destination, tag, run);
       copied++;
     }
   }
-  return totals;
+  return run;
 }
 
 /**
@@ -230,9 +248,48 @@ export async function handleReplicateTask(payload: unknown, env: Env): Promise<v
   // Deleted between the enqueue and the run.
   if (rule === null || !rule.enabled) return;
 
-  const totals =
+  const run =
     rule.direction === "push" ? await runPush(env, store, rule, input) : await runPull(env, store, rule);
-  await store.recordResult(rule, JSON.stringify(totals));
+  await store.recordResult(rule, JSON.stringify({ manifests: run.manifests, blobs: run.blobs }));
+
+  // Best-effort, like every other notification: the run already happened, so a
+  // webhook that cannot be queued must not force the whole copy to run again.
+  try {
+    await announceReplication(env, rule, input, run);
+  } catch (error) {
+    console.error("failed to announce replication", { rule: rule.id, error });
+  }
+}
+
+/**
+ * Tells the project's subscribed policies what a replication run did.
+ *
+ * One event per run, and only when there is news: a run that matched nothing
+ * copied and failed nothing, and is silent. A run that copied or failed at least
+ * one artifact announces itself, and a failure names the first error so a broken
+ * mirror is visible without reading the task tables.
+ */
+async function announceReplication(
+  env: Env,
+  rule: ReplicationRule,
+  payload: ReplicatePayload,
+  run: RunOutcome,
+): Promise<void> {
+  if (run.copied === 0 && run.failed === 0) return;
+
+  const event = events.REPLICATION({
+    project: rule.project,
+    ...(payload.repository === undefined ? {} : { repository: payload.repository }),
+    at: Date.now(),
+    data: {
+      rule: rule.name,
+      status: run.failed > 0 ? "failed" : "succeeded",
+      manifests: run.manifests,
+      blobs: run.blobs,
+      ...(run.firstError === null ? {} : { error: run.firstError }),
+    },
+  });
+  await notify(env, event);
 }
 
 /** Runs the scheduled rules that have come due. */

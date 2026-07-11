@@ -23,8 +23,9 @@ interface ArtifactOccurrence extends Occurrence {
   readonly actor: string;
 }
 
-interface RepositoryOccurrence extends Occurrence {
-  readonly repository: string;
+/** A replication run scopes to one repository when a push triggered it, and to the project on a sweep. */
+interface ReplicationOccurrence extends Occurrence {
+  readonly repository?: string;
   readonly data?: Readonly<Record<string, unknown>>;
 }
 
@@ -65,9 +66,9 @@ export const events = {
   PULL_ARTIFACT: (input: ArtifactOccurrence) => artifact("PULL_ARTIFACT", input),
   DELETE_ARTIFACT: (input: ArtifactOccurrence) => artifact("DELETE_ARTIFACT", input),
   QUOTA_EXCEEDED: (input: ProjectOccurrence) => project("QUOTA_EXCEEDED", input),
-  REPLICATION: (input: RepositoryOccurrence): NotificationEvent => ({
+  REPLICATION: (input: ReplicationOccurrence): NotificationEvent => ({
     ...base("REPLICATION", input),
-    repository: input.repository,
+    ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.data === undefined ? {} : { data: input.data }),
   }),
   CLEANUP: (input: ProjectOccurrence) => project("CLEANUP", input),
