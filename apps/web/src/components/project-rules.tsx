@@ -12,29 +12,22 @@ import type {
 // accepts is one the scheduled cleanup accepts.
 import { isValidRegex } from "@registry/regex";
 import { parseRange } from "@registry/semver";
-import { Badge } from "@workspace/ui/components/badge";
-import { Button } from "@workspace/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
-import { Input } from "@workspace/ui/components/input";
-import { Label } from "@workspace/ui/components/label";
+import { Badge } from "@registry/ui/components/badge";
+import { Button } from "@registry/ui/components/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@registry/ui/components/card";
+import { Input } from "@registry/ui/components/input";
+import { Label } from "@registry/ui/components/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@workspace/ui/components/select";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import { Switch } from "@workspace/ui/components/switch";
-import { toast } from "@workspace/ui/components/sonner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+} from "@registry/ui/components/select";
+import { Skeleton } from "@registry/ui/components/skeleton";
+import { Switch } from "@registry/ui/components/switch";
+import { toast } from "@registry/ui/components/sonner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { ApiError, api } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 

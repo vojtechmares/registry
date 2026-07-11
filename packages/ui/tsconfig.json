@@ -10,7 +10,7 @@
     "noEmit": true,
     "verbatimModuleSyntax": true,
     "paths": {
-      "@workspace/ui/*": ["./src/*"]
+      "@registry/ui/*": ["./src/*"]
     }
   },
   "include": ["src"],

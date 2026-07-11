@@ -1,18 +1,11 @@
 import { Link, createRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invalidate, keys } from "@/lib/queries";
-import { Badge } from "@workspace/ui/components/badge";
-import { Button } from "@workspace/ui/components/button";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import { toast } from "@workspace/ui/components/sonner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+import { Badge } from "@registry/ui/components/badge";
+import { Button } from "@registry/ui/components/button";
+import { Skeleton } from "@registry/ui/components/skeleton";
+import { toast } from "@registry/ui/components/sonner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { ApiError, api } from "@/lib/api";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 import { rootRoute } from "@/routes/root";

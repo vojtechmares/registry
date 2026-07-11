@@ -2,7 +2,7 @@ import type * as React from "react";
 import { CircleCheckIcon, InfoIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from "lucide-react";
 import { Toaster as Sonner, toast, type ToasterProps } from "sonner";
 
-import { useTheme } from "@workspace/ui/components/theme-provider";
+import { useTheme } from "@registry/ui/components/theme-provider";
 
 /**
  * Reads the theme from this library's own provider. The stock shadcn component

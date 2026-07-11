@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { Button } from "@workspace/ui/components/button";
-import { cn } from "@workspace/ui/lib/utils";
+import { Button } from "@registry/ui/components/button";
+import { cn } from "@registry/ui/lib/utils";
 
 interface CopyButtonProps {
   value: string;
