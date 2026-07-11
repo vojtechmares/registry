@@ -9,17 +9,22 @@
  * code intercepted in a redirect cannot be exchanged by anyone else.
  *
  * All three are useless if any of them is skipped, and skipping one is easy,
- * which is why they are minted together.
+ * which is why they are minted together - now by `oauth4webapi`, whose random
+ * values and S256 challenge are the audited counterparts of the ones this file
+ * used to compute by hand.
  */
+
+import {
+  calculatePKCECodeChallenge,
+  generateRandomCodeVerifier,
+  generateRandomNonce,
+  generateRandomState,
+} from "oauth4webapi";
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function randomToken(bytes = 32): string {
-  return base64UrlEncode(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
 export interface AuthorizationRequest {
@@ -30,16 +35,15 @@ export interface AuthorizationRequest {
 }
 
 /** `S256`, never `plain`: a plain challenge is the verifier, and protects nothing. */
-export async function codeChallengeOf(verifier: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  return base64UrlEncode(new Uint8Array(digest));
+export function codeChallengeOf(verifier: string): Promise<string> {
+  return calculatePKCECodeChallenge(verifier);
 }
 
 export async function createAuthorizationRequest(): Promise<AuthorizationRequest> {
-  const codeVerifier = randomToken(32);
+  const codeVerifier = generateRandomCodeVerifier();
   return {
-    state: randomToken(16),
-    nonce: randomToken(16),
+    state: generateRandomState(),
+    nonce: generateRandomNonce(),
     codeVerifier,
     codeChallenge: await codeChallengeOf(codeVerifier),
   };

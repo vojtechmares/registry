@@ -1,12 +1,23 @@
 /**
- * Verifying an ID token.
+ * Verifying an ID token, on `jose`.
  *
- * The algorithm is asserted from the key, never read from the token: a token
- * that names its own algorithm can name `none`, or name HMAC and be verified
- * with the public key as the shared secret. Both are the classic way to forge
- * one, and both die here because the header's `alg` is only ever used to *find*
- * the key, and the key decides how it is checked.
+ * The accepted algorithms are pinned to the two every provider offers, so a
+ * token that names `none`, or names HMAC to have its signature checked with the
+ * public key as the shared secret, is refused before any crypto runs - the same
+ * invariant the hand-rolled predecessor asserted, now on an audited verifier.
+ * The key is chosen from the provider's JWKS by `kid`, and `jose` checks the
+ * signature and every registered claim; the nonce - which binds the token to the
+ * flow this registry started - it does not know, so that is checked here.
  */
+
+import {
+  type JWK,
+  type JWTPayload,
+  decodeProtectedHeader,
+  errors as joseErrors,
+  importJWK,
+  jwtVerify,
+} from "jose";
 
 export type Algorithm = "RS256" | "ES256";
 
@@ -36,66 +47,11 @@ export interface IdTokenClaims {
   readonly groups?: string[];
 }
 
-function base64UrlDecode(text: string): Uint8Array {
-  const padded = text
-    .replace(/-/g, "+")
-    .replace(/_/g, "/")
-    .padEnd(Math.ceil(text.length / 4) * 4, "=");
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function decodeJson<T>(segment: string): T | null {
-  try {
-    return JSON.parse(new TextDecoder().decode(base64UrlDecode(segment))) as T;
-  } catch {
-    return null;
-  }
-}
-
 /** Only the two algorithms every provider offers. Anything else is refused rather than guessed at. */
 function algorithmOf(jwk: Jwk): Algorithm | null {
   if (jwk.kty === "RSA") return "RS256";
   if (jwk.kty === "EC" && jwk.crv === "P-256") return "ES256";
   return null;
-}
-
-/**
- * Named inline rather than reached for from the DOM library: this package is
- * built for the Workers runtime, whose type environment declares neither
- * `RsaHashedImportParams` nor `EcdsaParams`.
- */
-type ImportParams = { name: "RSASSA-PKCS1-v1_5"; hash: "SHA-256" } | { name: "ECDSA"; namedCurve: "P-256" };
-
-type VerifyParams = { name: "RSASSA-PKCS1-v1_5" } | { name: "ECDSA"; hash: "SHA-256" };
-
-async function importKey(jwk: Jwk, algorithm: Algorithm): Promise<CryptoKey> {
-  const parameters: ImportParams =
-    algorithm === "RS256"
-      ? { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }
-      : { name: "ECDSA", namedCurve: "P-256" };
-
-  return crypto.subtle.importKey("jwk", jwk as JsonWebKey, parameters, false, ["verify"]);
-}
-
-async function verifySignature(
-  jwk: Jwk,
-  algorithm: Algorithm,
-  signingInput: string,
-  signature: Uint8Array,
-): Promise<boolean> {
-  const key = await importKey(jwk, algorithm);
-  const parameters: VerifyParams =
-    algorithm === "RS256" ? { name: "RSASSA-PKCS1-v1_5" } : { name: "ECDSA", hash: "SHA-256" };
-
-  return crypto.subtle.verify(
-    parameters,
-    key,
-    signature as unknown as BufferSource,
-    new TextEncoder().encode(signingInput),
-  );
 }
 
 export interface VerifyOptions {
@@ -111,6 +67,16 @@ export type VerifyResult =
   | { readonly ok: true; readonly claims: IdTokenClaims }
   | { readonly ok: false; readonly reason: string };
 
+/** Turns `jose`'s failure into the reason the predecessor reported for the same fault. */
+function reasonFor(error: unknown): string {
+  if (error instanceof joseErrors.JWTExpired) return "expired";
+  if (error instanceof joseErrors.JWTClaimValidationFailed) {
+    if (error.claim === "iss") return "issued by someone else";
+    if (error.claim === "aud") return "issued for another client";
+  }
+  return "signature does not verify";
+}
+
 /**
  * Checks the signature, then every claim that decides whether this token is
  * about the right person, from the right provider, for us, right now, and in
@@ -121,63 +87,62 @@ export async function verifyIdToken(
   keys: readonly Jwk[],
   options: VerifyOptions,
 ): Promise<VerifyResult> {
-  const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false, reason: "malformed token" };
-  const [rawHeader, rawPayload, rawSignature] = parts as [string, string, string];
+  if (token.split(".").length !== 3) return { ok: false, reason: "malformed token" };
 
-  const header = decodeJson<{ alg?: string; kid?: string }>(rawHeader);
-  if (header === null) return { ok: false, reason: "malformed header" };
-
-  let signature: Uint8Array;
+  let kid: string | undefined;
   try {
-    signature = base64UrlDecode(rawSignature);
+    const header = decodeProtectedHeader(token);
+    kid = typeof header.kid === "string" ? header.kid : undefined;
   } catch {
-    return { ok: false, reason: "malformed signature" };
+    return { ok: false, reason: "malformed header" };
   }
 
-  // The `kid` narrows which key to try, and nothing more. A token that names no
-  // key, or names one the provider does not publish, is checked against all of
-  // them - a provider mid-rotation legitimately does this.
-  const candidates = keys.filter((key) => header.kid === undefined || key.kid === header.kid);
-  const usable = (candidates.length > 0 ? candidates : keys).filter((key) => algorithmOf(key) !== null);
-  if (usable.length === 0) return { ok: false, reason: "no usable signing key" };
-
-  const signingInput = `${rawHeader}.${rawPayload}`;
-  let verified = false;
-  for (const jwk of usable) {
-    const algorithm = algorithmOf(jwk)!;
-    try {
-      if (await verifySignature(jwk, algorithm, signingInput, signature)) {
-        verified = true;
-        break;
-      }
-    } catch {
-      // A key that will not import is a key that did not sign this.
-    }
-  }
-  if (!verified) return { ok: false, reason: "signature does not verify" };
-
-  const claims = decodeJson<IdTokenClaims>(rawPayload);
-  if (claims === null) return { ok: false, reason: "malformed claims" };
-
-  if (claims.iss !== options.issuer) return { ok: false, reason: "issued by someone else" };
-
-  // `aud` may be an array, and then it must contain us. An `azp` check would
-  // matter if we accepted tokens issued to other clients; we do not.
-  const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audience.includes(options.clientId)) return { ok: false, reason: "issued for another client" };
-
-  if (typeof claims.sub !== "string" || claims.sub === "") return { ok: false, reason: "no subject" };
+  // The `kid` narrows which key to try; a token that names no key - a provider
+  // mid-rotation legitimately sends one - is checked against all of them.
+  const usable = keys.filter((key) => algorithmOf(key) !== null);
+  const candidates = kid === undefined ? usable : usable.filter((key) => key.kid === kid);
+  if (candidates.length === 0) return { ok: false, reason: "no usable signing key" };
 
   const skew = options.clockSkewSeconds ?? 60;
-  const now = Math.floor((options.now ?? Date.now()) / 1000);
-  if (typeof claims.exp !== "number" || claims.exp + skew <= now) return { ok: false, reason: "expired" };
-  if (typeof claims.iat !== "number" || claims.iat - skew > now) {
+  const nowMs = options.now ?? Date.now();
+  const verifyOptions = {
+    algorithms: ["RS256", "ES256"],
+    issuer: options.issuer,
+    audience: options.clientId,
+    clockTolerance: skew,
+    currentDate: new Date(nowMs),
+  };
+
+  let payload: JWTPayload | null = null;
+  let lastError: unknown = null;
+  for (const jwk of candidates) {
+    let key: CryptoKey | Uint8Array;
+    try {
+      key = await importJWK(jwk as JWK, algorithmOf(jwk)!);
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    try {
+      payload = (await jwtVerify(token, key, verifyOptions)).payload;
+      break;
+    } catch (error) {
+      lastError = error;
+      // Only a signature mismatch means "wrong key, try the next"; a bad claim or
+      // a disallowed algorithm holds whichever key is tried, so stop.
+      if (!(error instanceof joseErrors.JWSSignatureVerificationFailed)) break;
+    }
+  }
+  if (payload === null) return { ok: false, reason: reasonFor(lastError) };
+
+  // `jose` does not know our nonce, that a blank subject is no subject, or that a
+  // token dated in the future is one this registry refuses.
+  if (typeof payload.sub !== "string" || payload.sub === "") return { ok: false, reason: "no subject" };
+  const nowSeconds = Math.floor(nowMs / 1000);
+  if (typeof payload.iat !== "number" || payload.iat - skew > nowSeconds) {
     return { ok: false, reason: "issued in the future" };
   }
+  if (payload.nonce !== options.nonce) return { ok: false, reason: "nonce does not match" };
 
-  // Without this, an ID token obtained in any other flow could be replayed here.
-  if (claims.nonce !== options.nonce) return { ok: false, reason: "nonce does not match" };
-
-  return { ok: true, claims };
+  return { ok: true, claims: payload as unknown as IdTokenClaims };
 }

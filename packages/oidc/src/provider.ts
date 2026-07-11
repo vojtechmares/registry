@@ -1,3 +1,4 @@
+import * as oauth from "oauth4webapi";
 import type { Jwk } from "./verify.js";
 
 /** The subset of the discovery document this registry uses. */
@@ -14,31 +15,47 @@ export interface DiscoveryOptions {
   readonly timeoutMs?: number;
 }
 
+/** A factory the library calls once per request, so each gets its own timeout. */
+function timeoutSignal(options: DiscoveryOptions): () => AbortSignal {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  return () => AbortSignal.timeout(timeoutMs);
+}
+
 /**
  * Fetches the provider's discovery document.
  *
- * The `issuer` inside it must equal the issuer we asked about, exactly. A
- * document that claims a different issuer is a document served by someone who
- * is not that issuer, and every later check - which compares the ID token's
- * `iss` against this one - would then be checking against a lie.
+ * `oauth4webapi` performs the fetch and then insists the `issuer` inside the
+ * document equals the one we asked about: a document that claims a different
+ * issuer is served by someone who is not that issuer, and every later check -
+ * which compares the ID token's `iss` against this one - would then be checking
+ * against a lie. The three endpoints this registry drives are required to be
+ * present before the document is trusted.
  */
 export async function discover(issuer: string, options: DiscoveryOptions = {}): Promise<ProviderMetadata> {
-  const fetcher = options.fetch ?? fetch;
-  const base = issuer.replace(/\/+$/, "");
-  const url = `${base}/.well-known/openid-configuration`;
+  const issuerUrl = new URL(issuer.replace(/\/+$/, ""));
 
-  const response = await fetcher(url, { signal: AbortSignal.timeout(options.timeoutMs ?? 10_000) });
-  if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
-
-  const metadata = (await response.json()) as ProviderMetadata;
-  if (metadata.issuer !== base && metadata.issuer !== issuer) {
-    throw new Error(`OIDC issuer mismatch: asked ${issuer}, document says ${metadata.issuer}`);
+  const requestOptions: oauth.DiscoveryRequestOptions = { algorithm: "oidc", signal: timeoutSignal(options) };
+  if (options.fetch !== undefined) {
+    const injected = options.fetch;
+    requestOptions[oauth.customFetch] = (url, init) => injected(url, init as unknown as RequestInit);
   }
+
+  const response = await oauth.discoveryRequest(issuerUrl, requestOptions);
+  const as = await oauth.processDiscoveryResponse(issuerUrl, response);
+
   for (const field of ["authorization_endpoint", "token_endpoint", "jwks_uri"] as const) {
-    if (typeof metadata[field] !== "string") throw new Error(`OIDC discovery document lacks ${field}`);
+    if (typeof as[field] !== "string") throw new Error(`OIDC discovery document lacks ${field}`);
   }
 
-  return metadata;
+  const metadata: ProviderMetadata = {
+    issuer: as.issuer,
+    authorization_endpoint: as.authorization_endpoint as string,
+    token_endpoint: as.token_endpoint as string,
+    jwks_uri: as.jwks_uri as string,
+  };
+  return typeof as.userinfo_endpoint === "string"
+    ? { ...metadata, userinfo_endpoint: as.userinfo_endpoint }
+    : metadata;
 }
 
 export async function fetchJwks(uri: string, options: DiscoveryOptions = {}): Promise<Jwk[]> {
@@ -92,31 +109,54 @@ export interface ExchangeOptions {
   readonly timeoutMs?: number;
 }
 
+/** The discovery subset, in the shape `oauth4webapi` reads its endpoints from. */
+function authorizationServer(metadata: ProviderMetadata): oauth.AuthorizationServer {
+  return {
+    issuer: metadata.issuer,
+    authorization_endpoint: metadata.authorization_endpoint,
+    token_endpoint: metadata.token_endpoint,
+    jwks_uri: metadata.jwks_uri,
+  };
+}
+
 /**
- * Trades the authorization code for tokens.
+ * Trades the authorization code for tokens, through `oauth4webapi`.
  *
- * The client secret goes in the body rather than in a Basic header. Both are
- * permitted; providers disagree about which they accept, and the body form is
- * the one they all do.
+ * The `state` is not rechecked here - the flow layer already compared it,
+ * constant time, against the value in its signed cookie - so the callback is
+ * validated with the state check skipped. Client authentication is
+ * `client_secret_post` when a secret is configured and `none` when it is not:
+ * the secret goes in the body, the form every provider accepts. The ID token in
+ * the response is verified separately, by `verifyIdToken`, against the JWKS.
  */
 export async function exchangeCode(options: ExchangeOptions): Promise<TokenResponse> {
-  const fetcher = options.fetch ?? fetch;
+  const as = authorizationServer(options.metadata);
+  const client: oauth.Client = { client_id: options.clientId };
+  const clientAuth =
+    options.clientSecret !== null ? oauth.ClientSecretPost(options.clientSecret) : oauth.None();
 
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code: options.code,
-    redirect_uri: options.redirectUri,
-    client_id: options.clientId,
-    code_verifier: options.codeVerifier,
-  });
-  if (options.clientSecret !== null) body.set("client_secret", options.clientSecret);
+  const callback = oauth.validateAuthResponse(
+    as,
+    client,
+    new URLSearchParams({ code: options.code }),
+    oauth.skipStateCheck,
+  );
 
-  const response = await fetcher(options.metadata.token_endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: body.toString(),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-  });
+  const requestOptions: oauth.TokenEndpointRequestOptions = { signal: timeoutSignal(options) };
+  if (options.fetch !== undefined) {
+    const injected = options.fetch;
+    requestOptions[oauth.customFetch] = (url, init) => injected(url, init as unknown as RequestInit);
+  }
+
+  const response = await oauth.authorizationCodeGrantRequest(
+    as,
+    client,
+    clientAuth,
+    callback,
+    options.redirectUri,
+    options.codeVerifier,
+    requestOptions,
+  );
 
   if (!response.ok) throw new Error(`OIDC token exchange failed: ${response.status}`);
 
