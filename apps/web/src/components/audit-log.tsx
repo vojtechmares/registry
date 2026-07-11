@@ -2,26 +2,19 @@ import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { keys } from "@/lib/queries";
 import type { AuditEvent, AuditResourceType } from "@registry/api-contract";
-import { Badge } from "@workspace/ui/components/badge";
-import { Button } from "@workspace/ui/components/button";
-import { Input } from "@workspace/ui/components/input";
-import { Label } from "@workspace/ui/components/label";
+import { Badge } from "@registry/ui/components/badge";
+import { Button } from "@registry/ui/components/button";
+import { Input } from "@registry/ui/components/input";
+import { Label } from "@registry/ui/components/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@workspace/ui/components/select";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+} from "@registry/ui/components/select";
+import { Skeleton } from "@registry/ui/components/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { api } from "@/lib/api";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 

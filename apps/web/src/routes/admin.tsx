@@ -3,9 +3,9 @@ import { createRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invalidate, keys } from "@/lib/queries";
 import type { UserSummary } from "@registry/api-contract";
-import { Badge } from "@workspace/ui/components/badge";
-import { Button } from "@workspace/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
+import { Badge } from "@registry/ui/components/badge";
+import { Button } from "@registry/ui/components/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@registry/ui/components/card";
 import {
   Dialog,
   DialogContent,
@@ -14,21 +14,14 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@workspace/ui/components/dialog";
-import { Input } from "@workspace/ui/components/input";
-import { Label } from "@workspace/ui/components/label";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import { toast } from "@workspace/ui/components/sonner";
-import { Switch } from "@workspace/ui/components/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@workspace/ui/components/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+} from "@registry/ui/components/dialog";
+import { Input } from "@registry/ui/components/input";
+import { Label } from "@registry/ui/components/label";
+import { Skeleton } from "@registry/ui/components/skeleton";
+import { toast } from "@registry/ui/components/sonner";
+import { Switch } from "@registry/ui/components/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@registry/ui/components/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { AuditLog } from "@/components/audit-log";
 import { RepositoryTable } from "@/components/repository-table";
 import { ApiError, api } from "@/lib/api";

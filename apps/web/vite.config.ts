@@ -10,7 +10,7 @@ const WORKER = process.env.REGISTRY_ORIGIN ?? "http://127.0.0.1:8787";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    // `@workspace/ui` is deliberately not aliased: its `exports` map is what
+    // `@registry/ui` is deliberately not aliased: its `exports` map is what
     // routes `./globals.css` to `src/styles/globals.css`, and an alias would
     // flatten that away.
     alias: {

@@ -2,22 +2,15 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invalidate, keys } from "@/lib/queries";
 import type { Action, CreatedAccessToken } from "@registry/api-contract";
-import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert";
-import { Badge } from "@workspace/ui/components/badge";
-import { Button } from "@workspace/ui/components/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
-import { Input } from "@workspace/ui/components/input";
-import { Label } from "@workspace/ui/components/label";
-import { Skeleton } from "@workspace/ui/components/skeleton";
-import { toast } from "@workspace/ui/components/sonner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+import { Alert, AlertDescription, AlertTitle } from "@registry/ui/components/alert";
+import { Badge } from "@registry/ui/components/badge";
+import { Button } from "@registry/ui/components/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@registry/ui/components/card";
+import { Input } from "@registry/ui/components/input";
+import { Label } from "@registry/ui/components/label";
+import { Skeleton } from "@registry/ui/components/skeleton";
+import { toast } from "@registry/ui/components/sonner";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { CopyButton } from "@/components/copy-button";
 import { ApiError, api } from "@/lib/api";
 import { formatDate, formatRelativeTime } from "@/lib/format";

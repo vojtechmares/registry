@@ -1,9 +1,9 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useStore } from "@tanstack/react-store";
 import { BoxIcon, LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
-import { Button } from "@workspace/ui/components/button";
-import { toast } from "@workspace/ui/components/sonner";
-import { useTheme } from "@workspace/ui/components/theme-provider";
+import { Button } from "@registry/ui/components/button";
+import { toast } from "@registry/ui/components/sonner";
+import { useTheme } from "@registry/ui/components/theme-provider";
 import { api } from "@/lib/api";
 import { SiteFooter } from "@/components/site-footer";
 import { sessionStore, setSessionUser } from "@/store/session";

@@ -8,7 +8,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { render, type RenderResult } from "@testing-library/react";
-import { ThemeProvider } from "@workspace/ui/components/theme-provider";
+import { ThemeProvider } from "@registry/ui/components/theme-provider";
 
 /**
  * Components that render `<Link>` need a router in context, and components that

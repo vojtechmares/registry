@@ -120,6 +120,9 @@ importers:
       '@registry/semver':
         specifier: workspace:*
         version: link:../../packages/semver
+      '@registry/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tanstack/react-query':
         specifier: ^5.90.2
         version: 5.101.1(react@19.2.7)
@@ -132,9 +135,6 @@ importers:
       '@tanstack/store':
         specifier: ^0.7.7
         version: 0.7.7
-      '@workspace/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       lucide-react:
         specifier: ^1.21.0
         version: 1.21.0(react@19.2.7)

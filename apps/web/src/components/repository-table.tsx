@@ -1,14 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { RepositorySummary } from "@registry/api-contract";
-import { Badge } from "@workspace/ui/components/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@workspace/ui/components/table";
+import { Badge } from "@registry/ui/components/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@registry/ui/components/table";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 
 interface RepositoryTableProps {
