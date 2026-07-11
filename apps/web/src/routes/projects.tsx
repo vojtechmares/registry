@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, createRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import { useStore } from "@tanstack/react-store";
 import type { ProjectSummary, Visibility } from "@registry/api-contract";
 import { Badge } from "@workspace/ui/components/badge";
@@ -39,7 +40,7 @@ function CreateProject() {
     onSuccess: (project) => {
       toast.success(`Created ${project.name}`);
       setName("");
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      invalidate.projects(queryClient);
     },
     onError: (error) => {
       toast.error(error instanceof ApiError ? error.message : "Could not create the project");
@@ -87,7 +88,7 @@ function CreateProject() {
 
 function Projects() {
   const { user } = useStore(sessionStore);
-  const { data, isPending } = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const { data, isPending } = useQuery({ queryKey: keys.projects(), queryFn: api.projects });
 
   return (
     <div className="space-y-6">

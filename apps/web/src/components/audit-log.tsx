@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { keys } from "@/lib/queries";
 import type { AuditEvent, AuditResourceType } from "@registry/api-contract";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
@@ -76,7 +77,7 @@ export function AuditLog() {
   };
 
   const { data, isPending, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ["audit", filters],
+    queryKey: keys.audit(filters),
     queryFn: ({ pageParam }) => api.audit({ ...filters, ...(pageParam === "" ? {} : { cursor: pageParam }) }),
     initialPageParam: "",
     getNextPageParam: (last) => last.cursor,

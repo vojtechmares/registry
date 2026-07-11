@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { keys } from "@/lib/queries";
 import { SearchIcon } from "lucide-react";
 import { Input } from "@workspace/ui/components/input";
 import { Skeleton } from "@workspace/ui/components/skeleton";
@@ -20,7 +21,7 @@ const LOGO = [
 function Browse() {
   const [search, setSearch] = useState("");
   const { data, isPending, error } = useQuery({
-    queryKey: ["repositories", search],
+    queryKey: keys.repositories(search),
     queryFn: () => api.repositories(search),
   });
 

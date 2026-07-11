@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { keys } from "@/lib/queries";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
 import { Input } from "@workspace/ui/components/input";
@@ -15,7 +16,7 @@ function Login() {
   const [password, setPassword] = useState("");
 
   // Whether single sign-on is configured, so the button is shown only when it works.
-  const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
+  const providers = useQuery({ queryKey: keys.providers(), queryFn: api.providers });
   // A message the OIDC callback may have redirected back with.
   const callbackError = new URLSearchParams(window.location.search).get("error");
 

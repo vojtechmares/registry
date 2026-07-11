@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { invalidate } from "@/lib/queries";
 import type { ProjectDetail, Role } from "@registry/api-contract";
 import { Button } from "@workspace/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card";
@@ -33,7 +34,7 @@ function message(error: unknown, fallback: string): string {
  */
 export function ProjectMembers({ project }: { project: ProjectDetail }) {
   const queryClient = useQueryClient();
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["project", project.name] });
+  const refresh = () => invalidate.projectMembers(queryClient, project.name);
 
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<Role>("developer");
@@ -43,7 +44,7 @@ export function ProjectMembers({ project }: { project: ProjectDetail }) {
     onSuccess: (member) => {
       toast.success(`${member.username} is now a ${member.role}`);
       setUsername("");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not add the member")),
   });
@@ -51,13 +52,13 @@ export function ProjectMembers({ project }: { project: ProjectDetail }) {
   const setRoleOf = useMutation({
     mutationFn: ({ userId, next }: { userId: string; next: Role }) =>
       api.setMember(project.name, userId, next),
-    onSuccess: invalidate,
+    onSuccess: refresh,
     onError: (error) => toast.error(message(error, "Could not update the member")),
   });
 
   const remove = useMutation({
     mutationFn: (userId: string) => api.removeMember(project.name, userId),
-    onSuccess: invalidate,
+    onSuccess: refresh,
     onError: (error) => toast.error(message(error, "Could not remove the member")),
   });
 

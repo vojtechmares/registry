@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   CleanupPolicy,
@@ -344,6 +344,19 @@ describe("the notifications card", () => {
     expect(mocks.deleteNotification).toHaveBeenCalledWith("acme", "n1");
   });
 
+  // The invalidation edge: a webhook mutation refreshes both the policy list and
+  // the delivery log, so a stale delivery cannot linger against a deleted hook.
+  it("refetches the webhook list and the delivery log after a webhook is deleted", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete webhook ci-hook" }));
+    await waitFor(() => {
+      expect(mocks.notifications.mock.calls.length).toBeGreaterThan(1);
+      expect(mocks.deliveries.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
   it("shows a failed delivery against the webhook's name, with the response and the error", async () => {
     renderWithProviders(<ProjectRules name="acme" />);
 
@@ -387,6 +400,19 @@ describe("the replication card", () => {
 
     await user.click(await screen.findByRole("button", { name: "Delete rule downstream" }));
     expect(mocks.deleteReplicationRule).toHaveBeenCalledWith("acme", "r1");
+  });
+
+  // The invalidation edge: a rule mutation refreshes both the rule list and its
+  // run log.
+  it("refetches the rule list and the run log after a rule is deleted", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectRules name="acme" />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete rule downstream" }));
+    await waitFor(() => {
+      expect(mocks.replicationRules.mock.calls.length).toBeGreaterThan(1);
+      expect(mocks.executions.mock.calls.length).toBeGreaterThan(1);
+    });
   });
 
   it("shows what each run copied, against the rule's name", async () => {

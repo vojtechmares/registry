@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, createRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import { useStore } from "@tanstack/react-store";
 import type { ProjectDetail } from "@registry/api-contract";
 import { Button } from "@workspace/ui/components/button";
@@ -29,15 +30,11 @@ import { VisibilityBadge } from "@/routes/projects";
 import { sessionStore } from "@/store/session";
 
 function useProject(name: string) {
-  return useQuery({ queryKey: ["project", name], queryFn: () => api.project(name) });
+  return useQuery({ queryKey: keys.project(name), queryFn: () => api.project(name) });
 }
 
 function Settings({ project }: { project: ProjectDetail }) {
   const queryClient = useQueryClient();
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["project", project.name] });
-    void queryClient.invalidateQueries({ queryKey: ["projects"] });
-  };
 
   const [description, setDescription] = useState(project.description ?? "");
   const [quotaGiB, setQuotaGiB] = useState(
@@ -49,7 +46,7 @@ function Settings({ project }: { project: ProjectDetail }) {
       api.updateProject(project.name, settings),
     onSuccess: () => {
       toast.success("Saved");
-      invalidate();
+      invalidate.project(queryClient, project.name);
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : "Could not save"),
   });
@@ -193,7 +190,7 @@ function Settings({ project }: { project: ProjectDetail }) {
 
 function Usage({ name }: { name: string }) {
   const { data, isPending } = useQuery({
-    queryKey: ["project-stats", name],
+    queryKey: keys.projectStats(name),
     queryFn: () => api.projectStats(name, 30),
   });
 

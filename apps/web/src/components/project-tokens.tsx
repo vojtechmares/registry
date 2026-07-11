@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import type { Action, CreatedAccessToken } from "@registry/api-contract";
 import { Alert, AlertDescription, AlertTitle } from "@workspace/ui/components/alert";
 import { Badge } from "@workspace/ui/components/badge";
@@ -43,14 +44,11 @@ export function ProjectTokens({ project }: { project: string }) {
   const [actions, setActions] = useState<Action[]>(["pull"]);
 
   const { data, isPending } = useQuery({
-    queryKey: ["project-tokens", project],
+    queryKey: keys.projectTokens(project),
     queryFn: () => api.projectTokens(project),
   });
 
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["project-tokens", project] });
-    void queryClient.invalidateQueries({ queryKey: ["tokens"] });
-  };
+  const refresh = () => invalidate.tokens(queryClient, project);
 
   const create = useMutation({
     mutationFn: () => api.createProjectToken(project, { name, scopes: [{ repository, actions }] }),
@@ -58,7 +56,7 @@ export function ProjectTokens({ project }: { project: string }) {
       setCreated(token);
       setName("");
       setRepository("*");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not create the token")),
   });
@@ -67,7 +65,7 @@ export function ProjectTokens({ project }: { project: string }) {
     mutationFn: (id: string) => api.revokeProjectToken(project, id),
     onSuccess: () => {
       toast.success("Token revoked");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not revoke the token")),
   });

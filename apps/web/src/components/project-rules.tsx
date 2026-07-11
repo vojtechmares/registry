@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidate, keys } from "@/lib/queries";
 import type {
   CleanupPolicy,
   NotificationPolicySummary,
@@ -92,7 +93,7 @@ export function ProjectRules({ name }: { name: string }) {
 }
 
 function CleanupCard({ name }: { name: string }) {
-  const { data } = useQuery({ queryKey: ["cleanup", name], queryFn: () => api.cleanupPolicy(name) });
+  const { data } = useQuery({ queryKey: keys.cleanup(name), queryFn: () => api.cleanupPolicy(name) });
 
   return (
     <Card>
@@ -210,7 +211,7 @@ function CleanupEditor({ name, policy }: { name: string; policy: CleanupPolicy }
       api.setCleanupPolicy(name, { ...input, untaggedOlderThanDays: policy.untaggedOlderThanDays }),
     onSuccess: (saved) => {
       toast.success(saved.enabled ? "Cleanup schedule saved" : "Cleanup disabled");
-      void queryClient.invalidateQueries({ queryKey: ["cleanup", name] });
+      invalidate.cleanup(queryClient, name);
     },
     onError: (error) => toast.error(message(error, "Could not save")),
   });
@@ -463,18 +464,15 @@ function NotificationsCard({ name }: { name: string }) {
   const [secret, setSecret] = useState("");
 
   const { data: policies } = useQuery({
-    queryKey: ["notifications", name],
+    queryKey: keys.notifications(name),
     queryFn: () => api.notifications(name),
   });
   const { data: deliveries } = useQuery({
-    queryKey: ["deliveries", name],
+    queryKey: keys.deliveries(name),
     queryFn: () => api.deliveries(name),
   });
 
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["notifications", name] });
-    void queryClient.invalidateQueries({ queryKey: ["deliveries", name] });
-  };
+  const refresh = () => invalidate.notifications(queryClient, name);
 
   const create = useMutation({
     mutationFn: () =>
@@ -491,7 +489,7 @@ function NotificationsCard({ name }: { name: string }) {
       });
       setUrl("");
       setSecret("");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not add the webhook")),
   });
@@ -500,7 +498,7 @@ function NotificationsCard({ name }: { name: string }) {
     mutationFn: (id: string) => api.deleteNotification(name, id),
     onSuccess: () => {
       toast.success("Webhook removed");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not remove the webhook")),
   });
@@ -619,18 +617,15 @@ function ReplicationCard({ name }: { name: string }) {
   const [remote, setRemote] = useState("");
 
   const { data: rules } = useQuery({
-    queryKey: ["replication", name],
+    queryKey: keys.replication(name),
     queryFn: () => api.replicationRules(name),
   });
   const { data: executions } = useQuery({
-    queryKey: ["executions", name],
+    queryKey: keys.executions(name),
     queryFn: () => api.executions(name),
   });
 
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["replication", name] });
-    void queryClient.invalidateQueries({ queryKey: ["executions", name] });
-  };
+  const refresh = () => invalidate.replication(queryClient, name);
 
   const create = useMutation({
     mutationFn: () =>
@@ -643,7 +638,7 @@ function ReplicationCard({ name }: { name: string }) {
     onSuccess: () => {
       toast.success("Replication rule created");
       setRemote("");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not create the rule")),
   });
@@ -652,7 +647,7 @@ function ReplicationCard({ name }: { name: string }) {
     mutationFn: (id: string) => api.deleteReplicationRule(name, id),
     onSuccess: () => {
       toast.success("Replication rule removed");
-      invalidate();
+      refresh();
     },
     onError: (error) => toast.error(message(error, "Could not remove the rule")),
   });
@@ -662,7 +657,7 @@ function ReplicationCard({ name }: { name: string }) {
     // The rule is queued, not run: the history fills in once the worker drains it.
     onSuccess: () => {
       toast.success("Queued. The run will appear in the history once it finishes.");
-      void queryClient.invalidateQueries({ queryKey: ["executions", name] });
+      invalidate.executions(queryClient, name);
     },
     onError: (error) => toast.error(message(error, "Could not run the rule")),
   });
