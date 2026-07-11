@@ -1,3 +1,4 @@
+import { type NotificationEvent, events } from "@registry/notifications";
 import { OciError, digestEquals } from "@registry/oci";
 import { formatBytes, projectOf, quotaAdmits } from "@registry/projects";
 import type { ManifestRecord, RegistryPolicy } from "@registry/registry-core";
@@ -55,6 +56,10 @@ export class ProjectPolicy implements RegistryPolicy {
     private readonly projects: ProjectStore,
     private readonly signatures: SignatureIndex,
     private readonly tags: TagIndex,
+    // Called on a quota refusal so the request boundary can announce it. Absent
+    // off the request path - a replication pull or a retention run refuses the
+    // same way, but only a caller's push is worth telling the project about.
+    private readonly onQuotaExceeded?: (event: NotificationEvent) => void,
   ) {}
 
   private rulesFor(repository: string): Promise<ProjectRules | null> {
@@ -82,6 +87,16 @@ export class ProjectPolicy implements RegistryPolicy {
 
     const incoming = (await this.projects.charges(rules.name, blob.digest)) ? blob.size : 0;
     if (quotaAdmits(rules, incoming)) return;
+
+    // Construct the event at the refusal, the one place that knows the project is
+    // over. Whether it is dispatched - and how often - is the boundary's throttle.
+    this.onQuotaExceeded?.(
+      events.QUOTA_EXCEEDED({
+        project: rules.name,
+        at: Date.now(),
+        data: { quotaBytes: rules.quotaBytes, usedBytes: rules.usedBytes },
+      }),
+    );
 
     throw quotaExceeded(
       rules.name,

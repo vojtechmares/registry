@@ -1,3 +1,4 @@
+import { type NotificationEvent } from "@registry/notifications";
 import { OciError } from "@registry/oci";
 import { errorResponse, handleRegistryRequest, type RegistryContext } from "@registry/registry-core";
 import { apiApp } from "./api/app.js";
@@ -13,6 +14,7 @@ import { runDueCleanups } from "./lifecycle/cleanup.js";
 import { collectGarbage } from "./lifecycle/garbage-collector.js";
 import { runLifecycle } from "./lifecycle/policies.js";
 import { NOTIFY_TASK, handleNotifyTask, notify } from "./notifications/dispatch.js";
+import { claimQuotaWindow } from "./notifications/quota.js";
 import { dedupe, toNotificationEvent } from "./notifications/translate.js";
 import { ProjectPolicy } from "./policy.js";
 import { REPLICATE_TASK, handleReplicateTask, runDueReplications } from "./replication/execute.js";
@@ -152,13 +154,44 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   // cannot count must still be able to serve, and a `docker pull` must never
   // wait on a statistic.
   const events = new EventCollector();
+  // A push refused for quota tells the project, but off the response's critical
+  // path and throttled - see announceQuotaExceeded.
+  const quotaEvents: NotificationEvent[] = [];
   const response = await handleRegistryRequest(
     request,
-    registryContext(env, principal, store, request, events),
+    registryContext(env, principal, store, request, events, (event) => quotaEvents.push(event)),
   );
   if (events.events.length > 0) ctx.waitUntil(recordEvents(env, ctx, events, principal));
+  if (quotaEvents.length > 0) ctx.waitUntil(announceQuotaExceeded(env, ctx, quotaEvents));
 
   return response ?? notFound();
+}
+
+/**
+ * Dispatches a project's quota-exceeded event, at most once per cooldown window.
+ *
+ * A single request may refuse several blobs, and a CI loop may refuse dozens a
+ * minute; the per-project window collapses both into one piece of news. The
+ * refusals themselves already went out - this is best-effort, after the fact.
+ */
+async function announceQuotaExceeded(
+  env: Env,
+  ctx: ExecutionContext,
+  quotaEvents: readonly NotificationEvent[],
+): Promise<void> {
+  const byProject = new Map<string, NotificationEvent>();
+  for (const event of quotaEvents) byProject.set(event.project, event);
+
+  let queued = 0;
+  for (const [project, event] of byProject) {
+    try {
+      if (await claimQuotaWindow(env.DB, project, Date.now())) queued += await notify(env, event);
+    } catch (error) {
+      console.error("failed to announce quota exceeded", { project, error });
+    }
+  }
+
+  if (queued > 0) ctx.waitUntil(sweepTasks(env, TASK_HANDLERS));
 }
 
 /**
@@ -233,6 +266,7 @@ function registryContext(
   store: AuthStore,
   request: Request,
   events: EventCollector,
+  onQuotaExceeded: (event: NotificationEvent) => void,
 ): RegistryContext {
   return {
     metadata: new D1MetadataStore(env.DB),
@@ -240,7 +274,12 @@ function registryContext(
     uploads: new DurableObjectUploadStore(env.UPLOAD_SESSION),
     config: readCoreConfig(env),
     authorize: createAuthorize({ principal, store, config: readConfig(env, request) }),
-    policy: new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB), new TagIndex(env.DB)),
+    policy: new ProjectPolicy(
+      new ProjectStore(env.DB),
+      new SignatureIndex(env.DB),
+      new TagIndex(env.DB),
+      onQuotaExceeded,
+    ),
     events,
   };
 }
