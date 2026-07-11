@@ -1,5 +1,4 @@
 import { nextRun } from "@registry/cron";
-import { projectOf } from "@registry/projects";
 import {
   type CleanupRule,
   type ManifestState,
@@ -9,6 +8,11 @@ import {
   evaluateUntagged,
 } from "@registry/retention";
 import type { Env } from "../env.js";
+import { ProjectPolicy } from "../policy.js";
+import { ProjectStore } from "../storage/projects.js";
+import { SignatureIndex } from "../storage/signatures.js";
+import { TagIndex } from "../storage/tags.js";
+import { Retirer } from "./retire.js";
 
 const DAY_MS = 86_400_000;
 
@@ -27,7 +31,6 @@ interface PolicyRow {
   schedule: string;
   rules: string;
   untagged_older_than_days: number | null;
-  immutable_tags: number;
 }
 
 function parseRules(raw: string): CleanupRule[] {
@@ -46,23 +49,32 @@ function parseRules(raw: string): CleanupRule[] {
  * dies half way through has still consumed its slot, and the alternative - a
  * policy that retries immediately, forever - is how a bug in one project's
  * rules starves every other project's.
+ *
+ * One retirer serves the whole run: it caches each project's rules across the
+ * policies it retires from, and every deletion - tag or manifest - goes through
+ * its single path, which consults the same immutability guard the API's delete
+ * endpoints consult rather than re-deriving it.
  */
 export async function runDueCleanups(env: Env, now = Date.now()): Promise<CleanupReport[]> {
   const due = await env.DB.prepare(
-    `SELECT c.project, c.schedule, c.rules, c.untagged_older_than_days, p.immutable_tags
-     FROM cleanup_policies AS c
-     JOIN projects AS p ON p.name = c.project
-     WHERE c.enabled = 1 AND c.next_run_at IS NOT NULL AND c.next_run_at <= ?
-     ORDER BY c.next_run_at ASC
+    `SELECT project, schedule, rules, untagged_older_than_days
+     FROM cleanup_policies
+     WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+     ORDER BY next_run_at ASC
      LIMIT ?`,
   )
     .bind(now, MAX_POLICIES_PER_RUN)
     .all<PolicyRow>();
 
+  const retirer = new Retirer(
+    env.DB,
+    new ProjectPolicy(new ProjectStore(env.DB), new SignatureIndex(env.DB), new TagIndex(env.DB)),
+  );
+
   const reports: CleanupReport[] = [];
   for (const policy of due.results) {
     await reschedule(env, policy.project, policy.schedule, now);
-    reports.push(await runPolicy(env, policy, now));
+    reports.push(await runPolicy(env, retirer, policy, now));
   }
   return reports;
 }
@@ -75,22 +87,20 @@ export async function reschedule(env: Env, project: string, schedule: string, no
     .run();
 }
 
-async function runPolicy(env: Env, policy: PolicyRow, now: number): Promise<CleanupReport> {
+async function runPolicy(env: Env, retirer: Retirer, policy: PolicyRow, now: number): Promise<CleanupReport> {
   const rules = parseRules(policy.rules);
 
   const repositories = await env.DB.prepare("SELECT name FROM repositories WHERE project = ?")
     .bind(policy.project)
     .all<{ name: string }>();
 
-  // A project that enforces immutable tags retires none of them, whatever its
-  // rules say. A promise that a cron may quietly retract is not a promise. The
-  // untagged sweep below still runs: an untagged manifest has no tag to protect.
+  // Immutability is not re-derived here: every tag the rules doom is offered to
+  // the shared guard, which refuses a tag a project has frozen exactly as the
+  // API refuses it. A project that enforces immutability therefore retires none.
   let tagsRemoved = 0;
-  if (policy.immutable_tags !== 1) {
-    for (const { name } of repositories.results) {
-      if (tagsRemoved >= MAX_DELETIONS_PER_POLICY) break;
-      tagsRemoved += await cleanRepository(env, policy.project, name, rules, now);
-    }
+  for (const { name } of repositories.results) {
+    if (tagsRemoved >= MAX_DELETIONS_PER_POLICY) break;
+    tagsRemoved += await cleanRepository(env, retirer, policy.project, name, rules, now);
   }
 
   // The project-level column sweeps every repository at one TTL; it is untouched
@@ -98,14 +108,15 @@ async function runPolicy(env: Env, policy: PolicyRow, now: number): Promise<Clea
   let untaggedRemoved =
     policy.untagged_older_than_days === null || policy.untagged_older_than_days <= 0
       ? 0
-      : await retireUntagged(env, policy.project, policy.untagged_older_than_days, now);
+      : await retireUntagged(env, retirer, policy.project, policy.untagged_older_than_days, now);
 
-  // Untagged rules retire per repository, whatever the project's immutable-tags
-  // setting: an untagged manifest has no tag for that promise to protect.
+  // Untagged rules retire per repository. An untagged manifest has no tag for
+  // immutability to protect, so the guard permits it whatever the project's setting.
   for (const { name } of repositories.results) {
     if (untaggedRemoved >= MAX_DELETIONS_PER_POLICY) break;
     untaggedRemoved += await retireUntaggedByRule(
       env,
+      retirer,
       policy.project,
       name,
       rules,
@@ -124,6 +135,7 @@ async function runPolicy(env: Env, policy: PolicyRow, now: number): Promise<Clea
 
 async function cleanRepository(
   env: Env,
+  retirer: Retirer,
   project: string,
   repository: string,
   rules: readonly CleanupRule[],
@@ -136,31 +148,30 @@ async function cleanRepository(
   const tags: TagState[] = rows.results.map((row) => ({ name: row.name, updatedAt: row.updated_at }));
   const doomed = evaluateCleanup({ repository, tags, rules, now }).slice(0, MAX_DELETIONS_PER_POLICY);
 
-  for (const tag of doomed) {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM tags WHERE repository = ? AND name = ?").bind(repository, tag.name),
-      env.DB.prepare(
-        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
-         VALUES (?, ?, 'retire-tag', ?, ?, ?)`,
-      ).bind(project, repository, tag.name, tag.reason, now),
-    ]);
-  }
-
   // Only the tag is removed. The manifest survives until it is untagged for
   // long enough, or until garbage collection finds nothing pointing at it.
-  return doomed.length;
+  let removed = 0;
+  for (const tag of doomed) {
+    if (await retirer.retireTag(project, repository, tag.name, tag.reason, now)) removed++;
+  }
+  return removed;
 }
 
 /**
- * Removes manifests nothing points at any more.
+ * Retires the untagged manifests the project-level TTL column governs.
  *
  * An untagged manifest is usually a superseded image, but it may equally be a
  * signature or an SBOM - attached artifacts are untagged by design - or a
  * platform manifest inside a multi-architecture index. Deleting either would
- * silently break the thing that points at it, so both are protected here, the
- * same way the nightly sweep protects them.
+ * silently break the thing that points at it, so the query spares all three.
  */
-async function retireUntagged(env: Env, project: string, ttlDays: number, now: number): Promise<number> {
+async function retireUntagged(
+  env: Env,
+  retirer: Retirer,
+  project: string,
+  ttlDays: number,
+  now: number,
+): Promise<number> {
   const cutoff = now - ttlDays * DAY_MS;
 
   const candidates = await env.DB.prepare(
@@ -188,25 +199,12 @@ async function retireUntagged(env: Env, project: string, ttlDays: number, now: n
     .bind(project, cutoff, MAX_DELETIONS_PER_POLICY)
     .all<{ repository: string; digest: string }>();
 
+  let removed = 0;
   for (const { repository, digest } of candidates.results) {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM manifest_blobs WHERE repository = ? AND manifest_digest = ?").bind(
-        repository,
-        digest,
-      ),
-      env.DB.prepare("DELETE FROM manifest_children WHERE repository = ? AND manifest_digest = ?").bind(
-        repository,
-        digest,
-      ),
-      env.DB.prepare("DELETE FROM manifests WHERE repository = ? AND digest = ?").bind(repository, digest),
-      env.DB.prepare(
-        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
-         VALUES (?, ?, 'retire-manifest', ?, ?, ?)`,
-      ).bind(projectOf(repository), repository, digest, `untagged for more than ${ttlDays} days`, now),
-    ]);
+    const reason = `untagged for more than ${ttlDays} days`;
+    if (await retirer.retireManifest(project, repository, digest, reason, now)) removed++;
   }
-
-  return candidates.results.length;
+  return removed;
 }
 
 /**
@@ -221,6 +219,7 @@ async function retireUntagged(env: Env, project: string, ttlDays: number, now: n
  */
 async function retireUntaggedByRule(
   env: Env,
+  retirer: Retirer,
   project: string,
   repository: string,
   rules: readonly CleanupRule[],
@@ -262,26 +261,9 @@ async function retireUntaggedByRule(
   }));
 
   const doomed = evaluateUntagged({ repository, manifests, rules, now });
+  let removed = 0;
   for (const manifest of doomed) {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM manifest_blobs WHERE repository = ? AND manifest_digest = ?").bind(
-        repository,
-        manifest.name,
-      ),
-      env.DB.prepare("DELETE FROM manifest_children WHERE repository = ? AND manifest_digest = ?").bind(
-        repository,
-        manifest.name,
-      ),
-      env.DB.prepare("DELETE FROM manifests WHERE repository = ? AND digest = ?").bind(
-        repository,
-        manifest.name,
-      ),
-      env.DB.prepare(
-        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
-         VALUES (?, ?, 'retire-manifest', ?, ?, ?)`,
-      ).bind(project, repository, manifest.name, manifest.reason, now),
-    ]);
+    if (await retirer.retireManifest(project, repository, manifest.name, manifest.reason, now)) removed++;
   }
-
-  return doomed.length;
+  return removed;
 }
