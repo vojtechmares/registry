@@ -1,3 +1,5 @@
+import { D1MetadataStore } from "./metadata.js";
+
 /**
  * What the tag table says, for the policy hooks that need to ask.
  *
@@ -6,15 +8,19 @@
  * power to write as well.
  */
 export class TagIndex {
-  constructor(private readonly db: D1Database) {}
+  private readonly metadata: D1MetadataStore;
 
-  /** The digest a tag currently names, or null when the tag does not exist. */
+  constructor(private readonly db: D1Database) {
+    this.metadata = new D1MetadataStore(db);
+  }
+
+  /**
+   * The digest a tag currently names, or null when the tag does not exist. The
+   * resolution query has one home, in the metadata store; this narrow index
+   * delegates to it rather than restating it.
+   */
   async resolveTag(repository: string, tag: string): Promise<string | null> {
-    const row = await this.db
-      .prepare("SELECT manifest_digest FROM tags WHERE repository = ? AND name = ?")
-      .bind(repository, tag)
-      .first<{ manifest_digest: string }>();
-    return row?.manifest_digest ?? null;
+    return this.metadata.resolveTag(repository, tag);
   }
 
   /**
