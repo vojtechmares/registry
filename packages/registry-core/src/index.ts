@@ -1,3 +1,4 @@
+export * from "./commit.js";
 export * from "./http.js";
 export * from "./ports.js";
 export * from "./registry.js";

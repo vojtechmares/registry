@@ -1,5 +1,6 @@
 import { digestOfAsync, parseManifest, referencedContent, referrerArtifactType } from "@registry/oci";
 import type { BlobStream, ManifestBytes, RegistryClient } from "@registry/replication";
+import { commitBlob } from "@registry/registry-core";
 import type { ContentStore, ManifestRecord, MetadataStore, RegistryPolicy } from "@registry/registry-core";
 
 /**
@@ -103,7 +104,9 @@ export class LocalRegistry implements RegistryClient {
 
     const key = this.content.blobKey(digest);
     await this.content.put(key, body, size, digest.slice("sha256:".length));
-    await this.metadata.registerAndLinkBlob(repository, { digest, size, storageKey: key });
+    // The shared commit path: register, link, and drop this object if the same
+    // bytes already won under another key, rather than leaking it into storage.
+    await commitBlob(this.metadata, this.content, repository, { digest, size, storageKey: key });
   }
 
   async listTags(repository: string): Promise<string[]> {
