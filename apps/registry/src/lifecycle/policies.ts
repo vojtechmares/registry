@@ -1,3 +1,4 @@
+import { projectOf } from "@registry/projects";
 import { integer, type Env } from "../env.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -104,8 +105,16 @@ async function retireUntagged(env: Env, repository: string, ttlDays: number): Pr
       ),
       env.DB.prepare("DELETE FROM manifests WHERE repository = ? AND digest = ?").bind(repository, digest),
       env.DB.prepare(
-        "INSERT INTO lifecycle_events (repository, action, subject, reason, created_at) VALUES (?,?,?,?,?)",
-      ).bind(repository, "retire-manifest", digest, `untagged for more than ${ttlDays} days`, Date.now()),
+        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
+         VALUES (?,?,?,?,?,?)`,
+      ).bind(
+        projectOf(repository),
+        repository,
+        "retire-manifest",
+        digest,
+        `untagged for more than ${ttlDays} days`,
+        Date.now(),
+      ),
     ]);
   }
 
@@ -144,8 +153,16 @@ async function trimTags(env: Env, repository: string, keep: number): Promise<num
     await env.DB.batch([
       env.DB.prepare("DELETE FROM tags WHERE repository = ? AND name = ?").bind(repository, name),
       env.DB.prepare(
-        "INSERT INTO lifecycle_events (repository, action, subject, reason, created_at) VALUES (?,?,?,?,?)",
-      ).bind(repository, "retire-tag", name, `beyond the newest ${keep} tags`, Date.now()),
+        `INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at)
+         VALUES (?,?,?,?,?,?)`,
+      ).bind(
+        projectOf(repository),
+        repository,
+        "retire-tag",
+        name,
+        `beyond the newest ${keep} tags`,
+        Date.now(),
+      ),
     ]);
   }
 

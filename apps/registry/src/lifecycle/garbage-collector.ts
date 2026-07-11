@@ -94,10 +94,15 @@ async function collectUnreferencedBlobs(env: Env, cutoff: number): Promise<numbe
       await env.BUCKET.delete(row.storage_key);
     }
 
+    // A reclaimed blob is content-addressed and shared: it is collected only
+    // once no repository anywhere links it, so it belongs to no single project.
+    // The project is left null on purpose - this is registry-wide maintenance,
+    // not a project's own retention, and it stays out of the per-project
+    // cleanup history the management API serves.
     await env.DB.prepare(
-      "INSERT INTO lifecycle_events (repository, action, subject, reason, created_at) VALUES (?,?,?,?,?)",
+      "INSERT INTO lifecycle_events (project, repository, action, subject, reason, created_at) VALUES (?,?,?,?,?,?)",
     )
-      .bind(null, "collect-blob", row.digest, "no repository links this blob", Date.now())
+      .bind(null, null, "collect-blob", row.digest, "no repository links this blob", Date.now())
       .run();
 
     collected++;
