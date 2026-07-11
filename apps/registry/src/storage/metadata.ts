@@ -7,6 +7,7 @@ import type {
 } from "@registry/registry-core";
 import { projectOf } from "@registry/projects";
 import { placeholders } from "./sql.js";
+import { jsonObject } from "./codec.js";
 
 interface BlobRow {
   digest: string;
@@ -23,16 +24,6 @@ interface ManifestRow {
   annotations: string | null;
 }
 
-function parseAnnotations(raw: string | null): Record<string, string> | null {
-  if (raw === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, string>) : null;
-  } catch {
-    return null;
-  }
-}
-
 function toManifestRecord(row: ManifestRow): ManifestRecord {
   return {
     digest: row.digest,
@@ -40,7 +31,7 @@ function toManifestRecord(row: ManifestRow): ManifestRecord {
     size: row.size,
     artifactType: row.artifact_type,
     subjectDigest: row.subject_digest,
-    annotations: parseAnnotations(row.annotations),
+    annotations: jsonObject<Record<string, string>>(row.annotations),
   };
 }
 
@@ -437,7 +428,7 @@ export class D1MetadataStore implements MetadataStore {
       mediaType: row.media_type,
       size: row.size,
       artifactType: row.artifact_type,
-      annotations: parseAnnotations(row.annotations),
+      annotations: jsonObject<Record<string, string>>(row.annotations),
     }));
   }
 }

@@ -1,6 +1,7 @@
 import type { ProjectDetail, ProjectMember, ProjectSettings, ProjectSummary } from "@registry/api-contract";
-import { type Role, type Visibility, isRole } from "@registry/projects";
+import type { Role, Visibility } from "@registry/projects";
 import { type Audience, visibleProjectsFilter } from "../visibility.js";
+import { flag, flagValue, roleOf } from "./codec.js";
 
 interface ProjectRow {
   name: string;
@@ -39,13 +40,13 @@ function toSummary(row: ProjectRow): ProjectSummary {
     description: row.description,
     quotaBytes: row.quota_bytes,
     usedBytes: row.used_bytes,
-    requireSignaturePush: row.require_signature_push === 1,
-    requireSignaturePull: row.require_signature_pull === 1,
-    immutableTags: row.immutable_tags === 1,
+    requireSignaturePush: flag(row.require_signature_push),
+    requireSignaturePull: flag(row.require_signature_pull),
+    immutableTags: flag(row.immutable_tags),
     repositories: row.repositories,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    role: row.role !== null && isRole(row.role) ? row.role : null,
+    role: roleOf(row.role),
   };
 }
 
@@ -86,9 +87,9 @@ export class ProjectStore {
       name: row.name,
       quotaBytes: row.quota_bytes,
       usedBytes: row.used_bytes,
-      requireSignaturePush: row.require_signature_push === 1,
-      requireSignaturePull: row.require_signature_pull === 1,
-      immutableTags: row.immutable_tags === 1,
+      requireSignaturePush: flag(row.require_signature_push),
+      requireSignaturePull: flag(row.require_signature_pull),
+      immutableTags: flag(row.immutable_tags),
     };
   }
 
@@ -142,11 +143,12 @@ export class ProjectStore {
       .bind(project)
       .all<{ user_id: string; username: string; role: string; created_at: number }>();
 
-    return rows.results.flatMap((row): ProjectMember[] =>
-      isRole(row.role)
-        ? [{ userId: row.user_id, username: row.username, role: row.role, createdAt: row.created_at }]
-        : [],
-    );
+    return rows.results.flatMap((row): ProjectMember[] => {
+      const role = roleOf(row.role);
+      return role === null
+        ? []
+        : [{ userId: row.user_id, username: row.username, role, createdAt: row.created_at }];
+    });
   }
 
   async exists(name: string): Promise<boolean> {
@@ -230,15 +232,15 @@ export class ProjectStore {
     }
     if (settings.requireSignaturePush !== undefined) {
       assignments.push("require_signature_push = ?");
-      bindings.push(settings.requireSignaturePush ? 1 : 0);
+      bindings.push(flagValue(settings.requireSignaturePush));
     }
     if (settings.requireSignaturePull !== undefined) {
       assignments.push("require_signature_pull = ?");
-      bindings.push(settings.requireSignaturePull ? 1 : 0);
+      bindings.push(flagValue(settings.requireSignaturePull));
     }
     if (settings.immutableTags !== undefined) {
       assignments.push("immutable_tags = ?");
-      bindings.push(settings.immutableTags ? 1 : 0);
+      bindings.push(flagValue(settings.immutableTags));
     }
     if (assignments.length === 0) return this.exists(name);
 

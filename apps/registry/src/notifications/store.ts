@@ -1,4 +1,5 @@
 import { type EventType, type NotificationPolicy, isEventType } from "@registry/notifications";
+import { flag, jsonArray } from "../storage/codec.js";
 
 interface PolicyRow {
   id: string;
@@ -11,25 +12,18 @@ interface PolicyRow {
   event_types: string;
 }
 
-function parseEventTypes(raw: string): EventType[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is EventType => typeof entry === "string" && isEventType(entry));
-  } catch {
-    return [];
-  }
-}
-
 function toPolicy(row: PolicyRow): NotificationPolicy {
   return {
     id: row.id,
     project: row.project,
     name: row.name,
-    enabled: row.enabled === 1,
+    enabled: flag(row.enabled),
     targetType: row.target_type,
     target: row.target,
-    eventTypes: parseEventTypes(row.event_types),
+    eventTypes: jsonArray(
+      row.event_types,
+      (value): value is EventType => typeof value === "string" && isEventType(value),
+    ),
   };
 }
 

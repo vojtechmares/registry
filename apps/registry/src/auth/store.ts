@@ -1,5 +1,6 @@
 import { type Role, type Visibility, isRole, projectOf } from "@registry/projects";
 import { parseScopes, type Scope } from "./scopes.js";
+import { flag } from "../storage/codec.js";
 
 export interface UserRecord {
   readonly id: string;
@@ -42,8 +43,8 @@ function toUser(row: UserRow): UserRecord {
     id: row.id,
     username: row.username,
     passwordHash: row.password_hash,
-    isAdmin: row.is_admin === 1,
-    disabled: row.disabled === 1,
+    isAdmin: flag(row.is_admin),
+    disabled: flag(row.disabled),
   };
 }
 
@@ -90,7 +91,7 @@ export class AuthStore {
       scopes: parseScopes(row.scopes),
       project: row.project,
       expiresAt: row.expires_at,
-      revoked: row.revoked === 1,
+      revoked: flag(row.revoked),
     };
   }
 

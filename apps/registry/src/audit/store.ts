@@ -1,5 +1,6 @@
 import type { AuditActorKind, AuditEvent, AuditPage, AuditResourceType } from "@registry/api-contract";
 import type { Principal } from "../auth/principal.js";
+import { jsonObject } from "../storage/codec.js";
 
 /** Who is making a change. `system` is a cron, which has no principal at all. */
 export interface AuditActor {
@@ -78,16 +79,6 @@ function decodeCursor(cursor: string): { createdAt: number; id: string } | null 
   return { createdAt, id };
 }
 
-function parseDetail(raw: string | null): Record<string, unknown> | null {
-  if (raw === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 function toEvent(row: Row): AuditEvent {
   return {
     id: row.id,
@@ -99,7 +90,7 @@ function toEvent(row: Row): AuditEvent {
     resourceType: row.resource_type,
     resource: row.resource,
     project: row.project,
-    detail: parseDetail(row.detail),
+    detail: jsonObject<Record<string, unknown>>(row.detail),
     createdAt: row.created_at,
   };
 }

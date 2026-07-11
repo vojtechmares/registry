@@ -13,6 +13,7 @@ import type {
 import { projectOf } from "@registry/projects";
 import { parseScopes, type Scope } from "../auth/scopes.js";
 import { type Audience, visibleProjectsFilter } from "../visibility.js";
+import { flag, flagValue, jsonObject, toUserSummary, type UserRow } from "./codec.js";
 
 /**
  * Escapes a literal for use inside a `LIKE` pattern, paired with `ESCAPE '\'`.
@@ -25,15 +26,6 @@ import { type Audience, visibleProjectsFilter } from "../visibility.js";
  */
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
-function json<T>(raw: string | null): T | null {
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
 }
 
 /** Read and write paths for the dashboard, kept apart from the hot registry path. */
@@ -265,7 +257,7 @@ export class AdminStore {
       artifactType: row.artifact_type,
       size: row.size,
       subjectDigest: row.subject_digest,
-      annotations: json<Record<string, string>>(row.annotations),
+      annotations: jsonObject<Record<string, string>>(row.annotations),
       createdAt: row.created_at,
       tags: tags.results.map((tag) => tag.name),
       blobs: blobs.results,
@@ -274,7 +266,7 @@ export class AdminStore {
         mediaType: referrer.media_type,
         artifactType: referrer.artifact_type,
         size: referrer.size,
-        annotations: json<Record<string, string>>(referrer.annotations),
+        annotations: jsonObject<Record<string, string>>(referrer.annotations),
       })),
     };
   }
@@ -326,7 +318,7 @@ export class AdminStore {
     if (row === null) return null;
     return {
       repository: row.repository,
-      enabled: row.enabled === 1,
+      enabled: flag(row.enabled),
       keepLastTags: row.keep_last_tags,
       untaggedTtlDays: row.untagged_ttl_days,
     };
@@ -345,7 +337,7 @@ export class AdminStore {
       )
       .bind(
         policy.repository,
-        policy.enabled ? 1 : 0,
+        flagValue(policy.enabled),
         policy.keepLastTags,
         policy.untaggedTtlDays,
         Date.now(),
@@ -379,7 +371,7 @@ export class AdminStore {
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       lastUsedAt: row.last_used_at,
-      revoked: row.revoked === 1,
+      revoked: flag(row.revoked),
     }));
   }
 
@@ -464,7 +456,7 @@ export class AdminStore {
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       lastUsedAt: row.last_used_at,
-      revoked: row.revoked === 1,
+      revoked: flag(row.revoked),
     }));
   }
 
@@ -484,23 +476,9 @@ export class AdminStore {
   async listUsers(): Promise<UserSummary[]> {
     const rows = await this.db
       .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users ORDER BY username")
-      .all<{
-        id: string;
-        username: string;
-        email: string | null;
-        is_admin: number;
-        disabled: number;
-        created_at: number;
-      }>();
+      .all<UserRow>();
 
-    return rows.results.map((row) => ({
-      id: row.id,
-      username: row.username,
-      email: row.email,
-      isAdmin: row.is_admin === 1,
-      disabled: row.disabled === 1,
-      createdAt: row.created_at,
-    }));
+    return rows.results.map(toUserSummary);
   }
 
   /** The id of the account holding this address, or null. Addresses are stored lowercase. */
@@ -523,26 +501,8 @@ export class AdminStore {
     return this.db
       .prepare("SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE id = ?")
       .bind(id)
-      .first<{
-        id: string;
-        username: string;
-        email: string | null;
-        is_admin: number;
-        disabled: number;
-        created_at: number;
-      }>()
-      .then((row) =>
-        row === null
-          ? null
-          : {
-              id: row.id,
-              username: row.username,
-              email: row.email,
-              isAdmin: row.is_admin === 1,
-              disabled: row.disabled === 1,
-              createdAt: row.created_at,
-            },
-      );
+      .first<UserRow>()
+      .then((row) => (row === null ? null : toUserSummary(row)));
   }
 
   async createUser(input: {
@@ -558,7 +518,7 @@ export class AdminStore {
         `INSERT INTO users (id, username, email, password_hash, is_admin, disabled, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
       )
-      .bind(input.id, input.username, input.email, input.passwordHash, input.isAdmin ? 1 : 0, now, now)
+      .bind(input.id, input.username, input.email, input.passwordHash, flagValue(input.isAdmin), now, now)
       .run();
 
     return {
@@ -599,32 +559,18 @@ export class AdminStore {
         "SELECT id, username, email, is_admin, disabled, created_at FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
       )
       .bind(input.issuer, input.subject)
-      .first<{
-        id: string;
-        username: string;
-        email: string | null;
-        is_admin: number;
-        disabled: number;
-        created_at: number;
-      }>();
+      .first<UserRow>();
 
     if (existing !== null) {
       // The provider is the authority on group membership, so administrator
       // status is re-read on every sign-in rather than frozen at creation.
-      if ((existing.is_admin === 1) !== input.isAdmin) {
+      if (flag(existing.is_admin) !== input.isAdmin) {
         await this.db
           .prepare("UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?")
-          .bind(input.isAdmin ? 1 : 0, Date.now(), existing.id)
+          .bind(flagValue(input.isAdmin), Date.now(), existing.id)
           .run();
       }
-      return {
-        id: existing.id,
-        username: existing.username,
-        email: existing.email,
-        isAdmin: input.isAdmin,
-        disabled: existing.disabled === 1,
-        createdAt: existing.created_at,
-      };
+      return { ...toUserSummary(existing), isAdmin: input.isAdmin };
     }
 
     const now = Date.now();
@@ -644,7 +590,7 @@ export class AdminStore {
            (id, username, email, password_hash, is_admin, disabled, created_at, updated_at, oidc_issuer, oidc_subject)
          VALUES (?, ?, ?, 'external:oidc', ?, 0, ?, ?, ?, ?)`,
       )
-      .bind(id, username, email, input.isAdmin ? 1 : 0, now, now, input.issuer, input.subject)
+      .bind(id, username, email, flagValue(input.isAdmin), now, now, input.issuer, input.subject)
       .run();
 
     return { id, username, email, isAdmin: input.isAdmin, disabled: false, createdAt: now };
